@@ -5,12 +5,12 @@ import skimage.measure as km
 import streamlit as st
 
 
-@st.cache(allow_output_mutation=False, ttl=24 * 60 * 60)
+@st.cache_resource(ttl=24 * 60 * 60)
 def get_model(model, backbone, n_classes, activation):
     return model(backbone, classes=n_classes, activation=activation)
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def get_test_augmentation():
     """Add paddings to make image shape divisible by 32"""
     test_transform = [
@@ -20,17 +20,17 @@ def get_test_augmentation():
     return A.Compose(test_transform)
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def to_tensor(x, **kwargs):
     return x.transpose(2, 0, 1).astype('float32')
 
 
-@st.cache(allow_output_mutation=True)
-def get_preprocessing(preprocessing_fn):
+@st.cache_resource
+def get_preprocessing(_preprocessing_fn):
     """Construct preprocessing transform
 
     Args:
-        preprocessing_fn (callbale): data normalization function
+        _preprocessing_fn (callbale): data normalization function
             (can be specific for each pretrained neural network)
     Return:
         transform: albumentations.Compose
@@ -38,13 +38,13 @@ def get_preprocessing(preprocessing_fn):
     """
 
     _transform = [
-        A.Lambda(image=preprocessing_fn),
+        A.Lambda(image=_preprocessing_fn),
         A.Lambda(image=to_tensor, mask=to_tensor),
     ]
     return A.Compose(_transform)
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def compute_iou(gt_mask, pred_mask):
     intersection = np.logical_and(pred_mask, gt_mask)
     union = np.logical_or(pred_mask, gt_mask)
@@ -52,7 +52,7 @@ def compute_iou(gt_mask, pred_mask):
     return iou_score
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def compute_pixel_acc(gt_mask, pred_mask):
     total = 256 ** 2
     errors = (np.abs((pred_mask == 0).sum() - (gt_mask == 0).sum()) + np.abs(
@@ -61,7 +61,7 @@ def compute_pixel_acc(gt_mask, pred_mask):
     return accuracy
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def compute_dice_coeff(gt_mask, pred_mask):
     intersection = np.sum(np.logical_and(pred_mask, gt_mask))
     union = np.sum(np.logical_or(pred_mask, gt_mask)) + intersection
@@ -69,7 +69,7 @@ def compute_dice_coeff(gt_mask, pred_mask):
     return dice_coef
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def compute_bboxes(image, pred_mask):
     """
 
@@ -85,14 +85,14 @@ def compute_bboxes(image, pred_mask):
     return bboxes
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def draw_bbox(image, bboxes):
     for box in bboxes:
         image = cv2.rectangle(image, (box[1], box[0]), (box[3], box[2]), (255, 0, 0), 2)
     return image
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def return_coordinates(bboxes):
     num_boxes = len(bboxes)
     coordinate_dict = {}
@@ -111,4 +111,9 @@ def get_model_info(model_name):
     arch, *enc, epochs = info.split('_')
 
     enc = '_'.join(enc[:-1])
+    
+    # Handle the case where epochs starts with 'e' (e.g., 'e50')
+    if epochs.startswith('e'):
+        epochs = epochs[1:]  # Remove the 'e' prefix
+        
     return arch, enc, int(epochs)

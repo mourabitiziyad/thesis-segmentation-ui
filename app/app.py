@@ -2,14 +2,28 @@ import gc
 import os
 import torch
 from pathlib import Path
+import streamlit as st
+import cv2
+import numpy as np
+import albumentations as A
 
 import segmentation_models_pytorch as smp
 from utils import *
 
 # ---------------------------------#
+# Page layout
+## Page expands to full width
+st.set_page_config(
+    page_title='Solar Panels Detection',
+    # anatomical heart favicon
+    page_icon="https://api.iconify.design/openmoji/solar-energy.svg?width=500",
+    layout='wide'
+)
+
+# ---------------------------------#
 # Data preprocessing and Model building
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def mask_read_local(gt_mask_dir):
     gt_mask = cv2.imread(gt_mask_dir, cv2.IMREAD_GRAYSCALE)
     gt_mask = cv2.threshold(gt_mask, 0, 255, cv2.THRESH_BINARY)[1]
@@ -17,7 +31,7 @@ def mask_read_local(gt_mask_dir):
     return gt_mask
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def mask_read_uploaded(uploaded_mask):
     file_bytes = np.asarray(bytearray(uploaded_mask.read()), dtype=np.uint8)
     uploaded_mask = cv2.imdecode(file_bytes, 1)
@@ -27,7 +41,7 @@ def mask_read_uploaded(uploaded_mask):
     return uploaded_mask
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def show_detection(image, pred_mask):
     """
 
@@ -44,7 +58,7 @@ def show_detection(image, pred_mask):
     return result
 
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def imgread_preprocessing(uploaded_img):  # final preprocessing function in streamlit
     # read data
     # CLASSES = ['solar_panel']
@@ -65,25 +79,24 @@ def imgread_preprocessing(uploaded_img):  # final preprocessing function in stre
     #    mask = np.concatenate((mask, background), axis=-1)
 
     # apply augmentations
-    augmentation = get_test_augmentation()
+    test_transform = [
+        A.Resize(256, 256),
+        A.PadIfNeeded(256, 256)
+    ]
+    augmentation = A.Compose(test_transform)
     sample = augmentation(image=image)
     image = sample['image']
 
-    # apply preprocessing
-    preprocessing = get_preprocessing(preprocess_input)
+    # apply preprocessing (using directly instead of through caching)
+    # Create preprocessing transform
+    _transform = [
+        A.Lambda(image=preprocess_input),
+        A.Lambda(image=lambda x, **kwargs: x.transpose(2, 0, 1).astype('float32')),
+    ]
+    preprocessing = A.Compose(_transform)
     sample = preprocessing(image=image)
     image = sample['image']
     return image
-
-# ---------------------------------#
-# Page layout
-## Page expands to full width
-st.set_page_config(
-    page_title='Solar Panels Detection',
-    # anatomical heart favicon
-    page_icon="https://api.iconify.design/openmoji/solar-energy.svg?width=500",
-    layout='wide'
-)
 
 # PAge Intro
 st.write("""
@@ -120,7 +133,7 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 # Sidebar - Collects user input features into dataframe
 
 with st.sidebar.header('Upload your image to detect solar panels'):
-    uploaded_file = st.sidebar.file_uploader("Upload your image in png format", type=["png"])
+    uploaded_file = st.sidebar.file_uploader("Upload your image", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
     with st.sidebar.header('You can upload its ground truth mask to compute scores'):
@@ -204,7 +217,7 @@ def deploy1(uploaded_file, uploaded_mask=None):
     # create model
     # model = get_model(ARCH, BACKBONE, n_classes, activation)
 
-    model = torch.load(model_path, map_location='cpu')
+    model = torch.load(model_path, map_location='cpu', weights_only=False)
 
     # st.write(uploaded_file)
     col1, col2, col3, col4 = st.columns((0.4, 0.4, 0.3, 0.3))
@@ -333,7 +346,7 @@ def deploy1(uploaded_file, uploaded_mask=None):
 
 def deploy2(selected_img_dir):
     # Load model
-    model = torch.load(Path(model_path), map_location='cpu')
+    model = torch.load(Path(model_path), map_location='cpu', weights_only=False)
 
     col1, col2, col3, col4 = st.columns((0.6, 0.6, 0.6, 0.6))
 
