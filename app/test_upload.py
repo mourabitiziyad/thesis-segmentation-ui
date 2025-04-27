@@ -15,7 +15,7 @@ if uploaded_file is not None:
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         image = cv2.imdecode(file_bytes, 1)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        st.image(image, caption='Uploaded Image', use_column_width=True)
+        st.image(image, caption='Uploaded Image', use_container_width=True)
         st.success("Successfully loaded image with OpenCV")
     except Exception as e:
         st.error(f"Error with OpenCV approach: {e}")
@@ -24,7 +24,7 @@ if uploaded_file is not None:
         try:
             # Option 2: Use PIL
             image = Image.open(uploaded_file)
-            st.image(image, caption='Uploaded Image (PIL)', use_column_width=True)
+            st.image(image, caption='Uploaded Image (PIL)', use_container_width=True)
             st.success("Successfully loaded image with PIL")
         except Exception as e:
             st.error(f"Error with PIL approach: {e}")

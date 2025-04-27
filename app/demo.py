@@ -155,7 +155,7 @@ def process_image_in_tiles(model, image, tile_size=512, overlap=128):
                     for j_viz in range(min(len(x_steps), mini_grid_cols)):
                         color = (0, 255, 0) if mini_grid[i_viz, j_viz] > 0 else (50, 50, 50)
                         grid_viz[i_viz*10:(i_viz+1)*10, j_viz*10:(j_viz+1)*10] = color
-                mini_grid_display.image(grid_viz, caption="Tile Processing Status", use_column_width=True)
+                mini_grid_display.image(grid_viz, caption="Tile Processing Status", use_container_width=True)
     
     # Clean up progress displays
     status_text.success("Processing complete!")
@@ -190,15 +190,26 @@ st.write("""
 Demonstration of PV (photovoltaic) panel segmentation using deep learning.
 """)
 
-# Load images from data directory
+# Load images and models data
 img_dir = 'data'
-img_files = list(filter(lambda x: 'label' not in x, os.listdir(img_dir)))
+# Filter out hidden files, system files, and non-image files
+valid_image_extensions = ['.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp']
+img_files = [f for f in os.listdir(img_dir) 
+             if not f.startswith('.') and  # Exclude hidden files like .DS_Store
+             not f.startswith('__') and    # Exclude system files like __pycache__
+             'label' not in f and          # Exclude label files
+             os.path.splitext(f)[1].lower() in valid_image_extensions]  # Only include valid image extensions
 
 # Check for old_data directory and add those images too
 old_data_dir = 'old_data'
 old_data_path = os.path.join('app', old_data_dir)
 if os.path.exists(old_data_path) and os.path.isdir(old_data_path):
-    old_img_files = list(filter(lambda x: 'label' not in x and x.endswith('.png'), os.listdir(old_data_path)))
+    # Filter old data images the same way
+    old_img_files = [f for f in os.listdir(old_data_path) 
+                     if not f.startswith('.') and 
+                     not f.startswith('__') and
+                     'label' not in f and 
+                     os.path.splitext(f)[1].lower() in valid_image_extensions]
     if old_img_files:
         st.sidebar.info(f"Found {len(old_img_files)} images in old_data directory")
         # Add a prefix to differentiate the old data files
@@ -207,30 +218,226 @@ if os.path.exists(old_data_path) and os.path.isdir(old_data_path):
 
 # Get model paths
 model_dir = '../models'
-model_files = list(filter(lambda x: x.endswith('.pth' or '.pt'), os.listdir(model_dir)))
+model_files = list(filter(lambda x: x.endswith('.pth') or x.endswith('.pt'), os.listdir(model_dir)))
 
-# Interface
-col_setup, col_results = st.columns([1, 3])
+# Main selection interface at the top
+if not img_files:
+    st.error("No valid image files found in the data directory. Please add images with extensions: .png, .jpg, .jpeg, .tif, .tiff, or .bmp")
+    st.stop()
 
-with col_setup:
-    st.subheader("Select an image and model")
-    
+top_col1, top_col2 = st.columns(2)
+with top_col1:
     # Image selection
     selected_img = st.selectbox(
         'Choose an image to analyze:',
         img_files,
-        index=1
+        index=0 if len(img_files) > 0 else None
     )
+
+with top_col2:
+    # Check if any models were found
+    if not model_files:
+        st.error("No model files found in the models directory. Please add .pth or .pt model files.")
+        st.stop()
     
     # Model selection
     selected_model = st.selectbox(
         'Choose a segmentation model:',
         model_files,
-        index=0
+        index=0 if len(model_files) > 0 else None
     )
+
+# Add segmentation parameters right after the header
+# Check if we have high-res images that might need tiled processing
+if selected_img:
+    # Determine image path
+    if selected_img.startswith("[OLD] "):
+        # Handle old data images
+        real_img_name = selected_img[6:]  # Remove the "[OLD] " prefix
+        img_path = os.path.join('app', old_data_dir, real_img_name)
+    else:
+        img_path = os.path.join(img_dir, selected_img)
     
-    # Settings
-    st.subheader("Settings")
+    # Check if file exists before trying to read it
+    if os.path.exists(img_path):
+        try:
+            # Load image to check dimensions
+            temp_img = cv2.imread(img_path)
+            if temp_img is None:
+                try:
+                    import tifffile
+                    temp_img = tifffile.imread(img_path)
+                except:
+                    pass
+                    
+            if temp_img is not None:
+                # Check if high-resolution
+                is_highres_image = ("4x" in selected_img or "10x" in selected_img or "x10" in selected_img or 
+                                   max(temp_img.shape[0], temp_img.shape[1]) > 1000)
+                
+                if is_highres_image:
+                    st.markdown("## Segmentation Parameters")
+                    
+                    # Special handling for high-resolution images
+                    use_tiled_processing = st.checkbox(
+                        "Use tiled processing (recommended for high-res images)",
+                        value=True,
+                        help="Process image in smaller tiles for better detection of small details"
+                    )
+                    
+                    # Add controls for patch size and overlap percentage using a 3-column layout
+                    if use_tiled_processing:
+                        # Determine max dimension of image for sensible defaults
+                        max_dim = max(temp_img.shape[0], temp_img.shape[1])
+                        
+                        # Calculate default patch size based on image dimensions
+                        default_patch_size = min(512, max(256, max_dim // 8))
+                        default_patch_size = default_patch_size + (default_patch_size % 32)  # Make divisible by 32
+                        
+                        # Create 3 columns for a more compact layout
+                        col1, col2, col3 = st.columns(3)
+                        
+                        # Patch size slider in first column
+                        with col1:
+                            patch_size = st.slider(
+                                "Patch Size (px):",
+                                min_value=128,
+                                max_value=1024,
+                                value=default_patch_size,
+                                step=32,
+                                help="Size of patches to process. Larger patches need more memory but may detect larger panels better."
+                            )
+                        
+                        # Overlap percentage slider in second column  
+                        with col2:
+                            overlap_percent = st.slider(
+                                "Overlap (%):",
+                                min_value=10,
+                                max_value=50,
+                                value=25,
+                                step=5,
+                                help="Percentage of overlap between patches. Higher overlap helps reduce boundary artifacts."
+                            )
+                            
+                            # Calculate actual overlap in pixels
+                            overlap = int(patch_size * overlap_percent / 100)
+                        
+                        # Scale factor slider in third column
+                        with col3:
+                            scale_factor = st.slider(
+                                "Resolution (%):",
+                                min_value=10,
+                                max_value=100,
+                                value=60 if max_dim > 4000 else 80,  # Default based on image size
+                                step=10,
+                                help="Percentage of original image resolution to use for processing."
+                            ) / 100  # Convert percentage to decimal
+                        
+                        st.info(f"Using patches of {patch_size}x{patch_size} pixels with {overlap} pixels ({overlap_percent}%) overlap at {scale_factor*100:.0f}% of original resolution")
+                        
+                        # Add a visual representation of the patch settings
+                        st.markdown("### Processing Overview")
+                        # Move visualization outside of nested columns
+                        col_viz1, col_viz2 = st.columns([1, 3])
+                        with col_viz1:
+                            # Create a simple visual of the patch size and overlap
+                            fig_size = 200
+                            patch_viz = np.zeros((fig_size, fig_size, 3), dtype=np.uint8)
+                            
+                            # Calculate visual parameters
+                            patch_ratio = patch_size / (max_dim * scale_factor)
+                            viz_patch_size = int(fig_size * patch_ratio)
+                            viz_patch_size = max(40, min(viz_patch_size, 150))  # Keep size reasonable
+                            
+                            viz_overlap = int(viz_patch_size * overlap_percent / 100)
+                            
+                            # Draw a few overlapping patches
+                            colors = [
+                                (100, 180, 100),  # Light green
+                                (100, 100, 180),  # Light blue
+                                (180, 100, 180),  # Light purple
+                                (180, 180, 100)   # Light yellow
+                            ]
+                            
+                            for i in range(2):
+                                for j in range(2):
+                                    x = int(j * (viz_patch_size - viz_overlap) + 20)
+                                    y = int(i * (viz_patch_size - viz_overlap) + 20)
+                                    # Draw the patch
+                                    color_idx = i * 2 + j
+                                    cv2.rectangle(
+                                        patch_viz, 
+                                        (x, y), 
+                                        (x + viz_patch_size, y + viz_patch_size), 
+                                        colors[color_idx], 
+                                        2
+                                    )
+                                    # Fill with semi-transparent color
+                                    overlay = patch_viz.copy()
+                                    cv2.rectangle(
+                                        overlay, 
+                                        (x, y), 
+                                        (x + viz_patch_size, y + viz_patch_size), 
+                                        colors[color_idx], 
+                                        -1
+                                    )
+                                    # Apply transparency
+                                    patch_viz = cv2.addWeighted(overlay, 0.2, patch_viz, 0.8, 0)
+                                    
+                                    # Add text label
+                                    cv2.putText(
+                                        patch_viz, 
+                                        f"Patch {color_idx+1}", 
+                                        (x + 5, y + 20), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 
+                                        0.4, 
+                                        (255, 255, 255), 
+                                        1
+                                    )
+                            
+                            # Show the visualization
+                            st.image(patch_viz, caption="Patch Overlap Visualization", use_container_width=True)
+                        
+                        with col_viz2:
+                            # Add explanation text
+                            st.markdown("""
+                            The segmentation process will:
+                            1. Scale the image to the selected resolution percentage
+                            2. Divide the image into overlapping patches
+                            3. Process each patch separately
+                            4. Blend the overlapping areas for a seamless result
+                            
+                            **Processing time** depends on image size, patch size, and overlap settings.
+                            Larger patches with high overlap provide better quality but take longer to process.
+                            """)
+                        
+                        # Move expander outside of any column structure
+                        st.markdown("### Parameter Effects")
+                        with st.expander("How do these settings affect segmentation?"):
+                            st.markdown("""
+                            **Patch Size**: 
+                            - **Larger patches** can detect larger solar panel arrays but require more memory
+                            - **Smaller patches** work better for images with many small solar panels
+                            - Recommended: 256-512px for most images, larger for high-resolution aerial imagery
+                            
+                            **Overlap Percentage**:
+                            - **Higher overlap** (30-50%) reduces boundary artifacts but increases processing time
+                            - **Lower overlap** (10-20%) is faster but may show visible seams between patches
+                            - Recommended: 25% for balanced quality and speed
+                            
+                            **Processing Resolution**:
+                            - **Higher percentages** (80-100%) preserve more detail but require more memory and time
+                            - **Lower percentages** (30-60%) process faster but may miss smaller panels
+                            - Recommended: 60-80% for most high-resolution images
+                            """)
+        except Exception as e:
+            st.warning(f"Could not determine if image is high-resolution: {e}")
+
+# Interface with left sidebar for controls and right area for results
+col_setup, col_results = st.columns([1, 3])
+
+with col_setup:
+    st.subheader("Display Settings")
     
     # Add resolution control
     img_resolution = st.slider(
@@ -285,20 +492,36 @@ if selected_img and selected_model:
     # Set model path (common for all image types)
     model_path = os.path.join(model_dir, selected_model)
     
+    # Check if image file exists
+    if not os.path.exists(img_path):
+        st.error(f"Image file not found: {img_path}")
+        st.stop()
+    
+    # Check if model file exists
+    if not os.path.exists(model_path):
+        st.error(f"Model file not found: {model_path}")
+        st.stop()
+    
     # Load image
-    image = cv2.imread(img_path)
-    if image is None:
-        # TIF files may need special handling
-        try:
-            import tifffile
-            st.info(f"Attempting to load TIF file using tifffile: {img_path}")
-            image = tifffile.imread(img_path)
-            # Convert to BGR if needed (tifffile loads as RGB)
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        except Exception as e:
-            st.error(f"Failed to load image: {img_path}. Error: {e}")
-            st.stop()
+    try:
+        image = cv2.imread(img_path)
+        if image is None:
+            # TIF files may need special handling
+            try:
+                import tifffile
+                st.info(f"Attempting to load TIF file using tifffile: {img_path}")
+                image = tifffile.imread(img_path)
+                # Convert to BGR if needed (tifffile loads as RGB)
+                if len(image.shape) == 3 and image.shape[2] == 3:
+                    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            except Exception as e:
+                st.error(f"Failed to load image: {img_path}. Error: {e}")
+                # Include additional info to help debug
+                st.error(f"Please ensure the file is a valid image and not corrupted.")
+                st.stop()
+    except Exception as e:
+        st.error(f"Error loading image {img_path}: {e}")
+        st.stop()
 
     if image is None:
         st.error(f"Failed to load image: {img_path}. The file may be corrupted or too large.")
@@ -315,158 +538,10 @@ if selected_img and selected_model:
     # Adaptive preprocessing based on image name and settings
     is_highres_image = "4x" in selected_img or "10x" in selected_img or "x10" in selected_img
     if is_highres_image or max(original_image.shape[0], original_image.shape[1]) > 1000:
-        # Add tiled processing settings in two columns before the main columns
-        st.markdown("## Segmentation Parameters")
-        
-        # Special handling for high-resolution images
-        use_tiled_processing = st.checkbox(
-            "Use tiled processing (recommended for high-res images)",
-            value=True,
-            help="Process image in smaller tiles for better detection of small details"
-        )
-        
-        # Add controls for patch size and overlap percentage using a 3-column layout
-        if use_tiled_processing:
-            # Determine max dimension of image for sensible defaults
-            max_dim = max(original_image.shape[0], original_image.shape[1])
-            
-            # Calculate default patch size based on image dimensions
-            default_patch_size = min(512, max(256, max_dim // 8))
-            default_patch_size = default_patch_size + (default_patch_size % 32)  # Make divisible by 32
-            
-            # Create 3 columns for a more compact layout
-            col1, col2, col3 = st.columns(3)
-            
-            # Patch size slider in first column
-            with col1:
-                patch_size = st.slider(
-                    "Patch Size (px):",
-                    min_value=128,
-                    max_value=1024,
-                    value=default_patch_size,
-                    step=32,
-                    help="Size of patches to process. Larger patches need more memory but may detect larger panels better."
-                )
-            
-            # Overlap percentage slider in second column  
-            with col2:
-                overlap_percent = st.slider(
-                    "Overlap (%):",
-                    min_value=10,
-                    max_value=50,
-                    value=25,
-                    step=5,
-                    help="Percentage of overlap between patches. Higher overlap helps reduce boundary artifacts."
-                )
-                
-                # Calculate actual overlap in pixels
-                overlap = int(patch_size * overlap_percent / 100)
-            
-            # Scale factor slider in third column
-            with col3:
-                scale_factor = st.slider(
-                    "Resolution (%):",
-                    min_value=10,
-                    max_value=100,
-                    value=60 if max_dim > 4000 else 80,  # Default based on image size
-                    step=10,
-                    help="Percentage of original image resolution to use for processing."
-                ) / 100  # Convert percentage to decimal
-            
-            st.info(f"Using patches of {patch_size}x{patch_size} pixels with {overlap} pixels ({overlap_percent}%) overlap at {scale_factor*100:.0f}% of original resolution")
-            
-            # Add a visual representation of the patch settings
-            col_viz1, col_viz2 = st.columns([1, 3])
-            with col_viz1:
-                # Create a simple visual of the patch size and overlap
-                fig_size = 200
-                patch_viz = np.zeros((fig_size, fig_size, 3), dtype=np.uint8)
-                
-                # Calculate visual parameters
-                patch_ratio = patch_size / (max_dim * scale_factor)
-                viz_patch_size = int(fig_size * patch_ratio)
-                viz_patch_size = max(40, min(viz_patch_size, 150))  # Keep size reasonable
-                
-                viz_overlap = int(viz_patch_size * overlap_percent / 100)
-                
-                # Draw a few overlapping patches
-                colors = [
-                    (100, 180, 100),  # Light green
-                    (100, 100, 180),  # Light blue
-                    (180, 100, 180),  # Light purple
-                    (180, 180, 100)   # Light yellow
-                ]
-                
-                for i in range(2):
-                    for j in range(2):
-                        x = int(j * (viz_patch_size - viz_overlap) + 20)
-                        y = int(i * (viz_patch_size - viz_overlap) + 20)
-                        # Draw the patch
-                        color_idx = i * 2 + j
-                        cv2.rectangle(
-                            patch_viz, 
-                            (x, y), 
-                            (x + viz_patch_size, y + viz_patch_size), 
-                            colors[color_idx], 
-                            2
-                        )
-                        # Fill with semi-transparent color
-                        overlay = patch_viz.copy()
-                        cv2.rectangle(
-                            overlay, 
-                            (x, y), 
-                            (x + viz_patch_size, y + viz_patch_size), 
-                            colors[color_idx], 
-                            -1
-                        )
-                        # Apply transparency
-                        patch_viz = cv2.addWeighted(overlay, 0.2, patch_viz, 0.8, 0)
-                        
-                        # Add text label
-                        cv2.putText(
-                            patch_viz, 
-                            f"Patch {color_idx+1}", 
-                            (x + 5, y + 20), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 
-                            0.4, 
-                            (255, 255, 255), 
-                            1
-                        )
-                
-                # Show the visualization
-                st.image(patch_viz, caption="Patch Overlap Visualization", use_column_width=True)
-            
-            with col_viz2:
-                # Add explanation text
-                st.markdown("""
-                ### Processing Overview
-                The segmentation process will:
-                1. Scale the image to the selected resolution percentage
-                2. Divide the image into overlapping patches
-                3. Process each patch separately
-                4. Blend the overlapping areas for a seamless result
-                
-                **Processing time** depends on image size, patch size, and overlap settings.
-                Larger patches with high overlap provide better quality but take longer to process.
-                """)
-            
-            with st.expander("How do these settings affect segmentation?"):
-                st.markdown("""
-                **Patch Size**: 
-                - **Larger patches** can detect larger solar panel arrays but require more memory
-                - **Smaller patches** work better for images with many small solar panels
-                - Recommended: 256-512px for most images, larger for high-resolution aerial imagery
-                
-                **Overlap Percentage**:
-                - **Higher overlap** (30-50%) reduces boundary artifacts but increases processing time
-                - **Lower overlap** (10-20%) is faster but may show visible seams between patches
-                - Recommended: 25% for balanced quality and speed
-                
-                **Processing Resolution**:
-                - **Higher percentages** (80-100%) preserve more detail but require more memory and time
-                - **Lower percentages** (30-60%) process faster but may miss smaller panels
-                - Recommended: 60-80% for most high-resolution images
-                """)
+        # If we didn't already set use_tiled_processing in the top section, default to True
+        if 'use_tiled_processing' not in locals():
+            # Special handling for high-resolution images
+            use_tiled_processing = True
         
         # Keep higher resolution for display
         image_for_display = cv2.resize(original_image, display_size, interpolation=cv2.INTER_AREA)
@@ -575,34 +650,43 @@ if selected_img and selected_model:
                 # Adjust scale factor based on image size and resolution
                 max_dim = max(original_image.shape[0], original_image.shape[1])
                 
-                # Image type-specific settings
-                if "x10" in selected_img or "10x" in selected_img:
-                    # Default scaling suggestion for 10x images (4320x4340)
-                    if 'scale_factor' not in locals():  # Only set if not already defined by user
-                        scale_factor = 0.6  # Use 60% of original size
-                elif "4x" in selected_img:
-                    # Default scaling suggestion for 4x images (3584x3584)
-                    if 'scale_factor' not in locals():
-                        scale_factor = 0.7  # Use 70% of original size
-                elif max_dim < 512:
-                    # For old PV01/PV08 images (256x256)
-                    if 'scale_factor' not in locals():
-                        scale_factor = 1.0  # No scaling needed
-                elif max_dim < 1000:
-                    # For small to medium images like the 432x434 standard image
-                    if 'scale_factor' not in locals():
-                        scale_factor = 1.0  # No scaling needed
-                else:
-                    # Default for large images
-                    if 'scale_factor' not in locals():
-                        if max_dim > 4000:
-                            scale_factor = 0.5  # Half size for very large
-                        elif max_dim > 2000:
-                            scale_factor = 0.7  # 70% for large
-                        else:
-                            scale_factor = 0.9  # 90% for medium-large
+                # Image type-specific settings - if not already set in the top parameters section
+                if 'scale_factor' not in locals() or 'patch_size' not in locals() or 'overlap' not in locals():
+                    if "x10" in selected_img or "10x" in selected_img:
+                        # Default scaling suggestion for 10x images (4320x4340)
+                        if 'scale_factor' not in locals():  # Only set if not already defined by user
+                            scale_factor = 0.6  # Use 60% of original size
+                    elif "4x" in selected_img:
+                        # Default scaling suggestion for 4x images (3584x3584)
+                        if 'scale_factor' not in locals():
+                            scale_factor = 0.7  # Use 70% of original size
+                    elif max_dim < 512:
+                        # For old PV01/PV08 images (256x256)
+                        if 'scale_factor' not in locals():
+                            scale_factor = 1.0  # No scaling needed
+                    elif max_dim < 1000:
+                        # For small to medium images like the 432x434 standard image
+                        if 'scale_factor' not in locals():
+                            scale_factor = 1.0  # No scaling needed
+                    else:
+                        # Default for large images
+                        if 'scale_factor' not in locals():
+                            if max_dim > 4000:
+                                scale_factor = 0.5  # Half size for very large
+                            elif max_dim > 2000:
+                                scale_factor = 0.7  # 70% for large
+                            else:
+                                scale_factor = 0.9  # 90% for medium-large
+                    
+                    # Set default tile size if not defined
+                    if 'patch_size' not in locals():
+                        patch_size = 512
+                        
+                    # Set default overlap if not defined
+                    if 'overlap' not in locals():
+                        overlap = int(patch_size * 0.25)  # 25% overlap
                 
-                # Use the user-specified patch size and overlap
+                # Use patch_size as tile_size to maintain naming consistency
                 tile_size = patch_size
                 
                 # Show processing details
@@ -791,74 +875,11 @@ if selected_img and selected_model:
                 for box in scaled_boxes:
                     image_bboxes = cv2.rectangle(image_bboxes, (box[1], box[0]), (box[3], box[2]), (255, 0, 0), 2)
                 st.image(image_bboxes, caption="Solar Panels with Bounding Boxes", use_container_width=True)
-            
-            # For high-res images, add a detail comparison section with different quality settings
-            if is_highres and do_tiled_processing:
-                st.subheader("Resolution Comparison")
-                st.write("Examine a magnified region to appreciate resolution difference:")
-                
-                # Create a zoomed-in view of a region of interest
-                roi_col1, roi_col2 = st.columns(2)
-                
-                # Find a region with panels (use the mask to find a good area to zoom in)
-                y_indices, x_indices = np.where(pr_mask > 0.5)
-                if len(y_indices) > 0 and len(x_indices) > 0:
-                    # Find center of a solar panel as our region of interest
-                    center_y = int(np.mean(y_indices))
-                    center_x = int(np.mean(x_indices))
-                    
-                    # Calculate zoom region coordinates
-                    zoom_size = min(256, pr_mask.shape[0]//4, pr_mask.shape[1]//4)
-                    zoom_y1 = max(0, center_y - zoom_size//2)
-                    zoom_y2 = min(pr_mask.shape[0], center_y + zoom_size//2)
-                    zoom_x1 = max(0, center_x - zoom_size//2)
-                    zoom_x2 = min(pr_mask.shape[1], center_x + zoom_size//2)
-                    
-                    # Extract zoom region from original high-resolution image (scale coordinates)
-                    orig_zoom_y1 = int(zoom_y1 / scale_factor)
-                    orig_zoom_y2 = int(zoom_y2 / scale_factor)
-                    orig_zoom_x1 = int(zoom_x1 / scale_factor)
-                    orig_zoom_x2 = int(zoom_x2 / scale_factor)
-                    
-                    # Ensure we don't go out of bounds
-                    orig_zoom_y1 = max(0, min(orig_zoom_y1, original_image.shape[0]-1))
-                    orig_zoom_y2 = max(0, min(orig_zoom_y2, original_image.shape[0]))
-                    orig_zoom_x1 = max(0, min(orig_zoom_x1, original_image.shape[1]-1))
-                    orig_zoom_x2 = max(0, min(orig_zoom_x2, original_image.shape[1]))
-                    
-                    # Extract zoomed regions
-                    zoom_img = processing_img[zoom_y1:zoom_y2, zoom_x1:zoom_x2]
-                    zoom_mask = pr_mask[zoom_y1:zoom_y2, zoom_x1:zoom_x2]
-                    orig_zoom_img = original_image[orig_zoom_y1:orig_zoom_y2, orig_zoom_x1:orig_zoom_x2]
-                    
-                    # Create overlay for zoomed region
-                    zoom_overlay = zoom_img.copy()
-                    zoom_overlay[zoom_mask > 0.5, 0] = 255  # Red channel for segmentation
-                    
-                    with roi_col1:
-                        st.write(f"**Processing Resolution ({scale_factor:.2f}x scale)**")
-                        st.image(zoom_img, caption="Zoomed processing image", use_container_width=True)
-                        st.image(zoom_overlay, caption="Segmentation overlay", use_container_width=True)
-                    
-                    with roi_col2:
-                        st.write("**Original Resolution (1.0x scale)**")
-                        st.image(orig_zoom_img, caption="Original resolution", use_container_width=True)
-                        # Create a comparable overlay for the original image
-                        resized_mask = cv2.resize(zoom_mask, (orig_zoom_img.shape[1], orig_zoom_img.shape[0]), 
-                                                 interpolation=cv2.INTER_NEAREST)
-                        orig_overlay = orig_zoom_img.copy()
-                        orig_overlay[resized_mask > 0.5, 0] = 255  # Red channel for segmentation
-                        st.image(orig_overlay, caption="Segmentation projected to original resolution", use_container_width=True)
-                    
-                    # Add explanation
-                    st.write("""
-                    This comparison shows how the segmentation appears at both the processing resolution and 
-                    the original high-resolution image. Higher quality settings preserve more details but take longer to process.
-                    """)
-                else:
-                    st.info("No solar panels detected for zoom comparison")
-        
-        # Area calculations
+
+        # END OF COLUMN LAYOUT - All column structures end here
+
+        # Area calculations section - moved outside the column structure
+        st.markdown("---")
         st.subheader("Area Calculations")
         area = np.round(float(img_resolution) ** 2 * pr_mask.sum(), 4)
         perc_area = np.round(100 * pr_mask.sum() / img_resolution ** 2, 2)
@@ -867,6 +888,79 @@ if selected_img and selected_model:
         st.write(f"**Total Solar Panel Area**: {area} square meters")
         st.write(f"**Coverage Percentage**: {perc_area}% of the image")
         st.write(f"**Image Area**: {total_area} square meters")
+        
+        # Resolution comparison - COMPLETELY OUTSIDE any existing column structure
+        if is_highres and do_tiled_processing:
+            st.markdown("---")
+            st.subheader("Resolution Comparison")
+            st.write("Examine a magnified region to appreciate resolution difference:")
+            
+            # Find a region with panels (use the mask to find a good area to zoom in)
+            y_indices, x_indices = np.where(pr_mask > 0.5)
+            if len(y_indices) > 0 and len(x_indices) > 0:
+                # Find center of a solar panel as our region of interest
+                center_y = int(np.mean(y_indices))
+                center_x = int(np.mean(x_indices))
+                
+                # Calculate zoom region coordinates
+                zoom_size = min(256, pr_mask.shape[0]//4, pr_mask.shape[1]//4)
+                zoom_y1 = max(0, center_y - zoom_size//2)
+                zoom_y2 = min(pr_mask.shape[0], center_y + zoom_size//2)
+                zoom_x1 = max(0, center_x - zoom_size//2)
+                zoom_x2 = min(pr_mask.shape[1], center_x + zoom_size//2)
+                
+                # Extract zoom region from original high-resolution image (scale coordinates)
+                orig_zoom_y1 = int(zoom_y1 / scale_factor)
+                orig_zoom_y2 = int(zoom_y2 / scale_factor)
+                orig_zoom_x1 = int(zoom_x1 / scale_factor)
+                orig_zoom_x2 = int(zoom_x2 / scale_factor)
+                
+                # Ensure we don't go out of bounds
+                orig_zoom_y1 = max(0, min(orig_zoom_y1, original_image.shape[0]-1))
+                orig_zoom_y2 = max(0, min(orig_zoom_y2, original_image.shape[0]))
+                orig_zoom_x1 = max(0, min(orig_zoom_x1, original_image.shape[1]-1))
+                orig_zoom_x2 = max(0, min(orig_zoom_x2, original_image.shape[1]))
+                
+                # Extract zoomed regions
+                zoom_img = processing_img[zoom_y1:zoom_y2, zoom_x1:zoom_x2]
+                zoom_mask = pr_mask[zoom_y1:zoom_y2, zoom_x1:zoom_x2]
+                orig_zoom_img = original_image[orig_zoom_y1:orig_zoom_y2, orig_zoom_x1:orig_zoom_x2]
+                
+                # Create overlay for zoomed region
+                zoom_overlay = zoom_img.copy()
+                zoom_overlay[zoom_mask > 0.5, 0] = 255  # Red channel for segmentation
+                
+                # Create a 2x2 grid for all comparison images
+                st.write("### Processing Resolution Images")
+                comp_col1, comp_col2 = st.columns(2)
+                with comp_col1:
+                    st.write(f"Zoomed image ({scale_factor:.2f}x scale)")
+                    st.image(zoom_img, use_container_width=True)
+                with comp_col2:
+                    st.write("Segmentation overlay")
+                    st.image(zoom_overlay, use_container_width=True)
+                
+                st.write("### Original Resolution Images")
+                orig_comp_col1, orig_comp_col2 = st.columns(2)
+                with orig_comp_col1:
+                    st.write("Original resolution")
+                    st.image(orig_zoom_img, use_container_width=True)
+                with orig_comp_col2:
+                    st.write("Segmentation projected to original")
+                    # Create a comparable overlay for the original image
+                    resized_mask = cv2.resize(zoom_mask, (orig_zoom_img.shape[1], orig_zoom_img.shape[0]), 
+                                             interpolation=cv2.INTER_NEAREST)
+                    orig_overlay = orig_zoom_img.copy()
+                    orig_overlay[resized_mask > 0.5, 0] = 255  # Red channel for segmentation
+                    st.image(orig_overlay, use_container_width=True)
+                
+                # Add explanation
+                st.write("""
+                This comparison shows how the segmentation appears at both the processing resolution and 
+                the original high-resolution image. Higher quality settings preserve more details but take longer to process.
+                """)
+            else:
+                st.info("No solar panels detected for zoom comparison")
         
         # Coordinates
         st.subheader("Panel Coordinates")
