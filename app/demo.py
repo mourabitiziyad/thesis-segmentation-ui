@@ -242,18 +242,35 @@ if selected_img and selected_model:
         # Handle old data images
         real_img_name = selected_img[6:]  # Remove the "[OLD] " prefix
         img_path = os.path.join('app', old_data_dir, real_img_name)
-        gt_mask_path = img_path.replace('.png', '_label.png')
+        # Fix: Use os.path.splitext to handle any file extension properly
+        base_path, ext = os.path.splitext(img_path)
+        gt_mask_path = f"{base_path}_label.png"
         st.info(f"Using image from old dataset: {real_img_name}")
     else:
         # Regular images from data directory
         img_path = os.path.join(img_dir, selected_img)
-        gt_mask_path = img_path.replace('.png', '_label.png')
+        # Fix: Use os.path.splitext to handle any file extension properly
+        base_path, ext = os.path.splitext(img_path)
+        gt_mask_path = f"{base_path}_label.png"
     
     # Set model path (common for all image types)
     model_path = os.path.join(model_dir, selected_model)
     
     # Load image
     image = cv2.imread(img_path)
+    if image is None:
+        # TIF files may need special handling
+        try:
+            import tifffile
+            st.info(f"Attempting to load TIF file using tifffile: {img_path}")
+            image = tifffile.imread(img_path)
+            # Convert to BGR if needed (tifffile loads as RGB)
+            if len(image.shape) == 3 and image.shape[2] == 3:
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            st.error(f"Failed to load image: {img_path}. Error: {e}")
+            st.stop()
+
     if image is None:
         st.error(f"Failed to load image: {img_path}. The file may be corrupted or too large.")
         st.stop()
