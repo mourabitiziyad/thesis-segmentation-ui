@@ -118,3 +118,6 @@ src/models/yolo/yolov5/runs
 
 *.docx
 *.txt
+
+data copy/
+old_data/
