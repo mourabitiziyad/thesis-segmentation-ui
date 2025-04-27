@@ -60,6 +60,9 @@ def process_image_in_tiles(model, image, tile_size=512, overlap=128):
     progress_bar = st.progress(0)
     tile_counter = 0
     
+    # Add status message
+    status_text = st.empty()
+    
     # Adaptive tile processing - for very large tiles, we might need to resize for inference
     model_input_size = 512  # Maximum input size for model to avoid memory issues
     resize_for_model = tile_size > model_input_size
@@ -76,10 +79,21 @@ def process_image_in_tiles(model, image, tile_size=512, overlap=128):
         weight = (weight - weight.min()) / (weight.max() - weight.min())
         return weight
 
-    st.write(f"Processing {total_tiles} tiles (size: {tile_size}px, overlap: {overlap}px)...")
+    status_text.info(f"Processing {total_tiles} tiles (size: {tile_size}px, overlap: {overlap}px)...")
+    
+    # Show a mini-grid of tile processing status
+    mini_grid_cols = min(10, len(x_steps))  # Cap at 10 columns
+    mini_grid_size = (len(y_steps), mini_grid_cols)
+    mini_grid = np.zeros(mini_grid_size, dtype=np.uint8)
+    
+    # Create placeholder for mini-grid visualization
+    mini_grid_display = st.empty()
     
     for i, y in enumerate(y_steps):
         for j, x in enumerate(x_steps):
+            # Update status
+            status_text.info(f"Processing tile {tile_counter+1}/{total_tiles} at position ({x}, {y})...")
+            
             # Extract tile
             y_end = min(y + tile_size, h)
             x_end = min(x + tile_size, w)
@@ -131,6 +145,21 @@ def process_image_in_tiles(model, image, tile_size=512, overlap=128):
             # Update progress
             tile_counter += 1
             progress_bar.progress(tile_counter / total_tiles)
+            
+            # Update mini-grid visualization
+            if j < mini_grid_cols:
+                mini_grid[i, j] = 255  # Mark as processed
+                # Create RGB visualization of mini-grid
+                grid_viz = np.zeros((len(y_steps)*10, mini_grid_cols*10, 3), dtype=np.uint8)
+                for i_viz in range(len(y_steps)):
+                    for j_viz in range(min(len(x_steps), mini_grid_cols)):
+                        color = (0, 255, 0) if mini_grid[i_viz, j_viz] > 0 else (50, 50, 50)
+                        grid_viz[i_viz*10:(i_viz+1)*10, j_viz*10:(j_viz+1)*10] = color
+                mini_grid_display.image(grid_viz, caption="Tile Processing Status", use_column_width=True)
+    
+    # Clean up progress displays
+    status_text.success("Processing complete!")
+    mini_grid_display.empty()
     
     # Normalize the mask by the weight map (add small epsilon to avoid division by zero)
     final_mask = full_mask / (weight_map + 1e-8)
@@ -286,7 +315,8 @@ if selected_img and selected_model:
     # Adaptive preprocessing based on image name and settings
     is_highres_image = "4x" in selected_img or "10x" in selected_img or "x10" in selected_img
     if is_highres_image or max(original_image.shape[0], original_image.shape[1]) > 1000:
-        st.info(f"Processing high-resolution image: {selected_img}")
+        # Add tiled processing settings in two columns before the main columns
+        st.markdown("## Segmentation Parameters")
         
         # Special handling for high-resolution images
         use_tiled_processing = st.checkbox(
@@ -294,6 +324,149 @@ if selected_img and selected_model:
             value=True,
             help="Process image in smaller tiles for better detection of small details"
         )
+        
+        # Add controls for patch size and overlap percentage using a 3-column layout
+        if use_tiled_processing:
+            # Determine max dimension of image for sensible defaults
+            max_dim = max(original_image.shape[0], original_image.shape[1])
+            
+            # Calculate default patch size based on image dimensions
+            default_patch_size = min(512, max(256, max_dim // 8))
+            default_patch_size = default_patch_size + (default_patch_size % 32)  # Make divisible by 32
+            
+            # Create 3 columns for a more compact layout
+            col1, col2, col3 = st.columns(3)
+            
+            # Patch size slider in first column
+            with col1:
+                patch_size = st.slider(
+                    "Patch Size (px):",
+                    min_value=128,
+                    max_value=1024,
+                    value=default_patch_size,
+                    step=32,
+                    help="Size of patches to process. Larger patches need more memory but may detect larger panels better."
+                )
+            
+            # Overlap percentage slider in second column  
+            with col2:
+                overlap_percent = st.slider(
+                    "Overlap (%):",
+                    min_value=10,
+                    max_value=50,
+                    value=25,
+                    step=5,
+                    help="Percentage of overlap between patches. Higher overlap helps reduce boundary artifacts."
+                )
+                
+                # Calculate actual overlap in pixels
+                overlap = int(patch_size * overlap_percent / 100)
+            
+            # Scale factor slider in third column
+            with col3:
+                scale_factor = st.slider(
+                    "Resolution (%):",
+                    min_value=10,
+                    max_value=100,
+                    value=60 if max_dim > 4000 else 80,  # Default based on image size
+                    step=10,
+                    help="Percentage of original image resolution to use for processing."
+                ) / 100  # Convert percentage to decimal
+            
+            st.info(f"Using patches of {patch_size}x{patch_size} pixels with {overlap} pixels ({overlap_percent}%) overlap at {scale_factor*100:.0f}% of original resolution")
+            
+            # Add a visual representation of the patch settings
+            col_viz1, col_viz2 = st.columns([1, 3])
+            with col_viz1:
+                # Create a simple visual of the patch size and overlap
+                fig_size = 200
+                patch_viz = np.zeros((fig_size, fig_size, 3), dtype=np.uint8)
+                
+                # Calculate visual parameters
+                patch_ratio = patch_size / (max_dim * scale_factor)
+                viz_patch_size = int(fig_size * patch_ratio)
+                viz_patch_size = max(40, min(viz_patch_size, 150))  # Keep size reasonable
+                
+                viz_overlap = int(viz_patch_size * overlap_percent / 100)
+                
+                # Draw a few overlapping patches
+                colors = [
+                    (100, 180, 100),  # Light green
+                    (100, 100, 180),  # Light blue
+                    (180, 100, 180),  # Light purple
+                    (180, 180, 100)   # Light yellow
+                ]
+                
+                for i in range(2):
+                    for j in range(2):
+                        x = int(j * (viz_patch_size - viz_overlap) + 20)
+                        y = int(i * (viz_patch_size - viz_overlap) + 20)
+                        # Draw the patch
+                        color_idx = i * 2 + j
+                        cv2.rectangle(
+                            patch_viz, 
+                            (x, y), 
+                            (x + viz_patch_size, y + viz_patch_size), 
+                            colors[color_idx], 
+                            2
+                        )
+                        # Fill with semi-transparent color
+                        overlay = patch_viz.copy()
+                        cv2.rectangle(
+                            overlay, 
+                            (x, y), 
+                            (x + viz_patch_size, y + viz_patch_size), 
+                            colors[color_idx], 
+                            -1
+                        )
+                        # Apply transparency
+                        patch_viz = cv2.addWeighted(overlay, 0.2, patch_viz, 0.8, 0)
+                        
+                        # Add text label
+                        cv2.putText(
+                            patch_viz, 
+                            f"Patch {color_idx+1}", 
+                            (x + 5, y + 20), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 
+                            0.4, 
+                            (255, 255, 255), 
+                            1
+                        )
+                
+                # Show the visualization
+                st.image(patch_viz, caption="Patch Overlap Visualization", use_column_width=True)
+            
+            with col_viz2:
+                # Add explanation text
+                st.markdown("""
+                ### Processing Overview
+                The segmentation process will:
+                1. Scale the image to the selected resolution percentage
+                2. Divide the image into overlapping patches
+                3. Process each patch separately
+                4. Blend the overlapping areas for a seamless result
+                
+                **Processing time** depends on image size, patch size, and overlap settings.
+                Larger patches with high overlap provide better quality but take longer to process.
+                """)
+            
+            with st.expander("How do these settings affect segmentation?"):
+                st.markdown("""
+                **Patch Size**: 
+                - **Larger patches** can detect larger solar panel arrays but require more memory
+                - **Smaller patches** work better for images with many small solar panels
+                - Recommended: 256-512px for most images, larger for high-resolution aerial imagery
+                
+                **Overlap Percentage**:
+                - **Higher overlap** (30-50%) reduces boundary artifacts but increases processing time
+                - **Lower overlap** (10-20%) is faster but may show visible seams between patches
+                - Recommended: 25% for balanced quality and speed
+                
+                **Processing Resolution**:
+                - **Higher percentages** (80-100%) preserve more detail but require more memory and time
+                - **Lower percentages** (30-60%) process faster but may miss smaller panels
+                - Recommended: 60-80% for most high-resolution images
+                """)
         
         # Keep higher resolution for display
         image_for_display = cv2.resize(original_image, display_size, interpolation=cv2.INTER_AREA)
@@ -404,37 +577,33 @@ if selected_img and selected_model:
                 
                 # Image type-specific settings
                 if "x10" in selected_img or "10x" in selected_img:
-                    # Settings for 10x images (4320x4340)
-                    scale_factor = 0.6  # Use 60% of original size
-                    tile_size = 768     # Use larger tiles
-                    overlap = 192       # Use 25% overlap
+                    # Default scaling suggestion for 10x images (4320x4340)
+                    if 'scale_factor' not in locals():  # Only set if not already defined by user
+                        scale_factor = 0.6  # Use 60% of original size
                 elif "4x" in selected_img:
-                    # Settings for 4x images (3584x3584)
-                    scale_factor = 0.7  # Use 70% of original size
-                    tile_size = 640     # Medium-sized tiles
-                    overlap = 160       # 25% overlap
+                    # Default scaling suggestion for 4x images (3584x3584)
+                    if 'scale_factor' not in locals():
+                        scale_factor = 0.7  # Use 70% of original size
                 elif max_dim < 512:
-                    # For old PV01/PV08 images (256x256) - no need for tiling but keep the process
-                    scale_factor = 1.0  # No scaling needed
-                    tile_size = 256     # Original size
-                    overlap = 64        # Small overlap for 256px images
+                    # For old PV01/PV08 images (256x256)
+                    if 'scale_factor' not in locals():
+                        scale_factor = 1.0  # No scaling needed
                 elif max_dim < 1000:
                     # For small to medium images like the 432x434 standard image
-                    scale_factor = 1.0  # No scaling needed
-                    tile_size = 384     # Slightly larger than the model input
-                    overlap = 96        # 25% overlap
+                    if 'scale_factor' not in locals():
+                        scale_factor = 1.0  # No scaling needed
                 else:
                     # Default for large images
-                    if max_dim > 4000:
-                        scale_factor = 0.5  # Half size for very large
-                        tile_size = 512
-                    elif max_dim > 2000:
-                        scale_factor = 0.7  # 70% for large
-                        tile_size = 512
-                    else:
-                        scale_factor = 0.9  # 90% for medium-large
-                        tile_size = 384
-                    overlap = int(tile_size * 0.25)  # 25% overlap
+                    if 'scale_factor' not in locals():
+                        if max_dim > 4000:
+                            scale_factor = 0.5  # Half size for very large
+                        elif max_dim > 2000:
+                            scale_factor = 0.7  # 70% for large
+                        else:
+                            scale_factor = 0.9  # 90% for medium-large
+                
+                # Use the user-specified patch size and overlap
+                tile_size = patch_size
                 
                 # Show processing details
                 st.info(f"Processing with: scale={scale_factor:.1f}, tile size={tile_size}px, overlap={overlap}px, image size={original_image.shape[1]}x{original_image.shape[0]}px")
@@ -461,6 +630,19 @@ if selected_img and selected_model:
     
     # Results section
     with col_results:
+        # Add a summary box of settings used at the top of results
+        if do_tiled_processing:
+            settings_col1, settings_col2, settings_col3 = st.columns(3)
+            with settings_col1:
+                st.metric("Patch Size", f"{tile_size}px")
+            with settings_col2:
+                st.metric("Overlap", f"{overlap_percent}%")
+            with settings_col3:
+                st.metric("Resolution", f"{int(scale_factor*100)}%")
+            
+            # Add a horizontal line to separate settings from results
+            st.markdown("---")
+        
         # Display columns
         col1, col2 = st.columns(2)
         
@@ -491,7 +673,7 @@ if selected_img and selected_model:
                     total_tiles = len(x_steps) * len(y_steps)
                     
                     st.write(f"**Processing Resolution**: {processing_w}x{processing_h} pixels ({scale_factor:.2f}x scale)")
-                    st.write(f"**Tile Size**: {tile_size}x{tile_size} pixels with {overlap}px overlap")
+                    st.write(f"**Tile Size**: {tile_size}x{tile_size} pixels with {overlap}px overlap ({overlap_percent if 'overlap_percent' in locals() else int(overlap/tile_size*100)}%)")
                     st.write(f"**Total Tiles Processed**: {total_tiles}")
             
             # Show metrics if ground truth is available
