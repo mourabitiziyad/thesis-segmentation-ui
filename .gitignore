@@ -1,11 +1,8 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-
-# C extensions
+*$py.class
 *.so
-
-# Distribution / packaging
 .Python
 env/
 build/
@@ -23,9 +20,41 @@ var/
 .installed.cfg
 *.egg
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Virtual Environment
+venv/
+ENV/
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Model files
+*.pth
+*.h5
+*.pkl
+*.pt
+*.onnx
+
+# Large data files
+*.zip
+*.tar.gz
+*.tgz
+
+# Distribution / packaging
 *.manifest
 *.spec
 
@@ -64,19 +93,10 @@ target/
 *.rdb
 
 # Pycharm
-.idea
-
-# VS Code
-.vscode/
-
-# Spyder
 .spyproject/
 
-# Jupyter NB Checkpoints
-.ipynb_checkpoints/
-
 # Mac OS-specific storage files
-.DS_Store
+*.DS_Store
 
 # vim
 *.swp
@@ -96,12 +116,5 @@ src/models/yolo/results
 src/models/yolo/wandb
 src/models/yolo/yolov5/runs
 
-*.zip
-*.pt
-*.npy
 *.docx
-*.h5
-*.pth
-*.bmp
-*.png
 *.txt
