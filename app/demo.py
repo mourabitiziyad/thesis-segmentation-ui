@@ -761,29 +761,6 @@ if selected_img and selected_model:
                 mask_caption = "Binary Mask"
             st.image(display_mask, caption=mask_caption, use_container_width=True)
         
-        # # Add a row showing just the binary mask under each image
-        # st.subheader("Binary Mask Views")
-        # bin_col1, bin_col2, bin_col3 = st.columns(3)
-        
-        # with bin_col1:
-        #     # Create a black and white view of the binary mask (under input image)
-        #     binary_mask_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
-        #     binary_mask_display[display_mask > 0.5] = [255, 255, 255]
-        #     st.image(binary_mask_display, caption="Binary Mask (B&W)", use_container_width=True)
-            
-        # with bin_col2:
-        #     # Create a red-colored binary mask view (under overlay)
-        #     red_mask_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
-        #     red_mask_display[display_mask > 0.5] = [255, 0, 0]
-        #     st.image(red_mask_display, caption="Binary Mask (Red)", use_container_width=True)
-            
-        # with bin_col3:
-        #     # Create a heat map style view (under binary mask)
-        #     heat_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
-        #     heat_display[display_mask > 0.5] = [0, 255, 0]
-        #     heat_display[display_mask <= 0.5] = [50, 50, 50]  # Dark gray background
-        #     st.image(heat_display, caption="Binary Mask (Highlight)", use_container_width=True)
-        
         # Info and metrics rows
         metrics_col, info_col = st.columns(2)
         
