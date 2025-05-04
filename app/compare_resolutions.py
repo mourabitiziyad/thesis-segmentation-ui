@@ -218,61 +218,8 @@ def find_image_groups(directory, extensions=['.png', '.jpg', '.jpeg', '.tif', '.
 
 def extract_resolution_from_filename(filename, full_path=None):
     """Extract resolution information from filename"""
-    # Special case for data set 4 files which have different naming patterns
-    
-    # For files with explicit model prefix like esrgan_4x or satlas_4x
-    model_res_match = re.search(r'^([a-zA-Z]+)_(\d+)x', filename)
-    if model_res_match:
-        model_name = model_res_match.group(1)
-        resolution = model_res_match.group(2)
-        return f"{model_name}_{resolution}x"
-    
-    # Look for explicit resolution patterns like 10x, 4x, x10, x4
-    match = re.search(r'(\d+)x|x(\d+)', filename)
-    if match:
-        # Return the first non-None group (either group 1 or 2)
-        res = match.group(1) or match.group(2)
-        # For S2L2Ax10 type patterns
-        if filename.startswith("S2L2Ax"):
-            return f"S2L2A_{res}x"
-        return res
-    
-    # For base S2L2A files (without resolution indicator)
-    if filename.startswith("S2L2A_") and not any(x in filename for x in ["4x", "10x", "x4", "x10"]):
-        return "S2L2A_1x"  # Base resolution
-    
-    # Look for dimensions in the filename - larger numbers might indicate higher resolution
-    # Example: if filename contains dimensions like 1024x1024 or 512x512
-    dim_match = re.search(r'(\d{3,4})x(\d{3,4})', filename)
-    if dim_match:
-        # Use the first dimension as an indicator
-        return dim_match.group(1)
-    
-    # If filename contains "high" or "low" resolution indicators
-    if "highres" in filename.lower() or "hi-res" in filename.lower() or "hi_res" in filename.lower():
-        return "High"
-    if "lowres" in filename.lower() or "lo-res" in filename.lower() or "lo_res" in filename.lower():
-        return "Low"
-    
-    # If filename contains words like "original", "full", etc.
-    if "original" in filename.lower() or "full" in filename.lower():
-        return "Original"
-    
-    # If nothing matches, check the file size - this requires the full path
-    if full_path:
-        try:
-            file_size = os.path.getsize(full_path)
-            # Very large files might be higher resolution
-            if file_size > 5 * 1024 * 1024:  # > 5MB
-                return "Large"
-            elif file_size > 1 * 1024 * 1024:  # > 1MB
-                return "Medium"
-            else:
-                return "Small"
-        except (OSError, IOError):
-            pass
-    
-    return "Unknown"
+    # Simply return the filename without any inference
+    return filename
 
 def create_difference_mask(mask1, mask2):
     """Create a visualization of differences between two masks"""
@@ -293,48 +240,6 @@ def create_difference_mask(mask1, mask2):
     diff[np.logical_and(mask1 <= 0.5, mask2 > 0.5)] = [0, 0, 255]
     
     return diff
-
-def compute_metrics_table(images_data):
-    """Compute metrics between all pairs of images"""
-    num_images = len(images_data)
-    metrics_data = []
-    
-    for i in range(num_images):
-        for j in range(i+1, num_images):
-            mask1 = images_data[i]["mask"]
-            mask2 = images_data[j]["mask"]
-            
-            # Resize mask2 to match mask1 dimensions for comparison
-            if mask1.shape != mask2.shape:
-                mask2_resized = cv2.resize(mask2, (mask1.shape[1], mask1.shape[0]), interpolation=cv2.INTER_NEAREST)
-            else:
-                mask2_resized = mask2
-            
-            # Calculate metrics
-            intersection = np.logical_and(mask1 > 0.5, mask2_resized > 0.5).sum()
-            union = np.logical_or(mask1 > 0.5, mask2_resized > 0.5).sum()
-            
-            iou = intersection / (union + 1e-8)
-            dice = 2 * intersection / ((mask1 > 0.5).sum() + (mask2_resized > 0.5).sum() + 1e-8)
-            
-            # Calculate area difference
-            area1 = (mask1 > 0.5).sum()
-            area2 = (mask2_resized > 0.5).sum()
-            area_diff = abs(area1 - area2) / max(area1, area2) * 100 if max(area1, area2) > 0 else 0
-            
-            # Add processing method information
-            img1_method = images_data[i].get("processing_method", "standard")
-            img2_method = images_data[j].get("processing_method", "standard")
-            
-            metrics_data.append({
-                "Image 1": f"{images_data[i]['filename']} ({img1_method})",
-                "Image 2": f"{images_data[j]['filename']} ({img2_method})",
-                "IoU": f"{iou:.4f}",
-                "Dice": f"{dice:.4f}",
-                "Area Diff (%)": f"{area_diff:.2f}%"
-            })
-    
-    return pd.DataFrame(metrics_data)
 
 def create_boundary_visualization(mask, kernel_size=3):
     """Create a visualization of the mask boundary"""
@@ -608,7 +513,7 @@ def main():
         
         # Find available data directories
         app_dir = os.path.dirname(os.path.abspath(__file__))
-        potential_data_dirs = ["data", "old_data", "test_data", "data set 4"]
+        potential_data_dirs = ["data", "data good", "test_data", "data set 4"]
         available_data_dirs = []
         
         for dir_name in potential_data_dirs:
@@ -650,13 +555,12 @@ def main():
         st.subheader("Visualization Options")
         viz_mode = st.radio(
             "Comparison view mode",
-            options=["Side-by-side", "Overlay", "Difference map", "Boundary comparison", "Heat Map"],
+            options=["Side-by-side", "Difference map"],
             index=0
         )
         
         # Display options
         show_metrics = st.checkbox("Show comparison metrics", value=True)
-        show_zoom = st.checkbox("Show zoomed region", value=True)
         
         # Advanced options in expander
         with st.expander("Advanced Options"):
@@ -876,43 +780,8 @@ def main():
         st.error("Need at least 2 related images to compare segmentation results.")
         return
     
-    # Sort images by resolution (if possible)
-    def get_sort_key(img_data):
-        res = img_data["resolution"]
-        
-        # For specialized model+resolution formats (like esrgan_4x)
-        model_res_match = re.match(r'([a-zA-Z]+)_(\d+)x', res)
-        if model_res_match:
-            res_val = int(model_res_match.group(2))
-            # Higher resolution value = higher priority
-            return 100 + res_val
-        
-        # For S2L2A_Nx format
-        s2l2a_match = re.match(r'S2L2A_(\d+)x', res)
-        if s2l2a_match:
-            res_val = int(s2l2a_match.group(1))
-            # Higher resolution value = higher priority
-            return 100 + res_val
-        
-        # For numeric resolutions
-        if res.isdigit():
-            return int(res)
-        # For text-based resolutions
-        elif res == "High":
-            return 1000
-        elif res == "Original":
-            return 900
-        elif res == "Large":
-            return 800
-        elif res == "Medium":
-            return 500
-        elif res == "Low" or res == "Small":
-            return 100
-        # Default for unknown
-        return 0
-
-    # Sort by resolution (higher values first)
-    images_data.sort(key=get_sort_key, reverse=True)
+    # We won't sort by resolution inference anymore, just use file order
+    # This preserves the original order of files
     
     # Add debug information
     st.sidebar.text("Image resolutions detected:")
@@ -947,7 +816,7 @@ def main():
 
     # Add explanatory text about the images
     st.markdown(f"""
-    Comparing {len(images_data)} images of the same location at different resolutions:
+    Comparing {len(images_data)} images from the selected group:
     {', '.join([f"{img['filename']} ({img['dimensions'][1]}×{img['dimensions'][0]}px)" for img in images_data])}
     """)
     
@@ -958,30 +827,35 @@ def main():
         
         for i, (col, img_data) in enumerate(zip(cols, images_data)):
             with col:
-                # Display original image
-                st.subheader(f"Image {i+1}: {img_data['resolution']}x")
+                # Display original image with exact filename
+                st.subheader(f"Image {i+1}: {img_data['filename']}")
                 st.image(img_data["display"], caption=f"Original {img_data['dimensions'][1]}×{img_data['dimensions'][0]}px")
                 
-                # Display processing method info
-                if img_data.get("is_highres", False):
-                    if img_data.get("processing_method") == "tiled":
-                        st.info(f"Processing: Tiled ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)")
-                    else:
-                        st.info("Processing: Standard")
-                
-                # Display segmentation mask
+                # Display segmentation mask with processing method in the caption
                 display_mask = cv2.resize(img_data["mask"], (display_size, display_size), interpolation=cv2.INTER_NEAREST)
                 mask_overlay = img_data["display"].copy()
                 mask_overlay[display_mask > 0.5] = mask_overlay[display_mask > 0.5] * 0.7 + np.array([255, 0, 0]) * 0.3
-                st.image(mask_overlay, caption="Segmentation Result")
+                
+                # Include processing method in the caption
+                if img_data.get("is_highres", False) and img_data.get("processing_method") == "tiled":
+                    caption = f"Segmentation Result - Tiled ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                else:
+                    caption = "Segmentation Result - Standard processing (no tiling applied)"
+                
+                st.image(mask_overlay, caption=caption)
+                
+                # Display binary mask
+                binary_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                binary_display[display_mask > 0.5] = [255, 255, 255]
+                st.image(binary_display, caption="Binary Mask")
     
     elif viz_mode == "Overlay":
-        # Compare the first (highest resolution) image with each other image
+        # Compare the first image with each other image
         reference_img = images_data[0]
-        st.subheader(f"Reference Image: {reference_img['resolution']}x")
+        st.subheader(f"Reference Image: {reference_img['filename']}")
         
         for i, img_data in enumerate(images_data[1:], 1):
-            st.markdown(f"#### Comparison with {img_data['resolution']}x image")
+            st.markdown(f"#### Comparison with {img_data['filename']}")
             
             # Create overlaid visualization
             heatmap = create_heat_map_visualization(
@@ -993,11 +867,23 @@ def main():
             
             col1, col2 = st.columns(2)
             with col1:
-                st.image(reference_img["display"], caption=f"Reference: {reference_img['resolution']}x")
+                # Add processing method to caption
+                ref_method = "Tiled" if reference_img.get("is_highres", False) and reference_img.get("processing_method") == "tiled" else "Standard"
+                if ref_method == "Tiled":
+                    ref_caption = f"Reference: {reference_img['filename']} - {ref_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                else:
+                    ref_caption = f"Reference: {reference_img['filename']} - {ref_method} processing"
+                st.image(reference_img["display"], caption=ref_caption)
             with col2:
-                st.image(img_data["display"], caption=f"Compare: {img_data['resolution']}x")
+                # Add processing method to caption
+                img_method = "Tiled" if img_data.get("is_highres", False) and img_data.get("processing_method") == "tiled" else "Standard"
+                if img_method == "Tiled":
+                    img_caption = f"Compare: {img_data['filename']} - {img_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                else:
+                    img_caption = f"Compare: {img_data['filename']} - {img_method} processing"
+                st.image(img_data["display"], caption=img_caption)
             
-            st.image(heatmap, caption=f"Overlay (Green: Both, Red: {reference_img['resolution']}x only, Blue: {img_data['resolution']}x only)")
+            st.image(heatmap, caption=f"Overlay (Green: Both, Red: {reference_img['filename']} only, Blue: {img_data['filename']} only)")
             
             # Add interactive slider comparison
             st.subheader("Interactive Comparison")
@@ -1025,7 +911,7 @@ def main():
             
             # Display the blended image
             with slider_container:
-                st.image(blended, caption=f"Comparison slider ({100-slider_value}% reference, {slider_value}% comparison)")
+                st.image(blended, caption=f"Comparison slider ({100-slider_value}% {reference_img['filename']}, {slider_value}% {img_data['filename']})")
             
             # Add a separator
             if i < len(images_data) - 1:
@@ -1046,18 +932,30 @@ def main():
                 diff_viz = create_difference_mask(mask1, mask2)
                 
                 # Display
-                st.markdown(f"#### {img1['resolution']}x vs {img2['resolution']}x")
+                st.markdown(f"#### {img1['filename']} vs {img2['filename']}")
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
                     mask1_overlay = img1["display"].copy()
                     mask1_overlay[mask1 > 0.5] = mask1_overlay[mask1 > 0.5] * 0.7 + np.array([255, 0, 0]) * 0.3
-                    st.image(mask1_overlay, caption=f"{img1['resolution']}x segmentation")
+                    # Add processing method to caption
+                    img1_method = "Tiled" if img1.get("is_highres", False) and img1.get("processing_method") == "tiled" else "Standard"
+                    if img1_method == "Tiled":
+                        img1_caption = f"{img1['filename']} - {img1_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                    else:
+                        img1_caption = f"{img1['filename']} - {img1_method} processing"
+                    st.image(mask1_overlay, caption=img1_caption)
                 
                 with col2:
                     mask2_overlay = img2["display"].copy()
                     mask2_overlay[mask2 > 0.5] = mask2_overlay[mask2 > 0.5] * 0.7 + np.array([0, 0, 255]) * 0.3
-                    st.image(mask2_overlay, caption=f"{img2['resolution']}x segmentation")
+                    # Add processing method to caption
+                    img2_method = "Tiled" if img2.get("is_highres", False) and img2.get("processing_method") == "tiled" else "Standard"
+                    if img2_method == "Tiled":
+                        img2_caption = f"{img2['filename']} - {img2_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                    else:
+                        img2_caption = f"{img2['filename']} - {img2_method} processing"
+                    st.image(mask2_overlay, caption=img2_caption)
                 
                 with col3:
                     st.image(diff_viz, caption="Difference Map")
@@ -1079,11 +977,11 @@ def main():
         # Focus on boundaries
         st.subheader("Boundary Comparison")
         
-        # Compare the first (highest resolution) image with each other image
+        # Compare the first image with each other image
         reference_img = images_data[0]
         
         for i, img_data in enumerate(images_data[1:], 1):
-            st.markdown(f"#### {reference_img['resolution']}x vs {img_data['resolution']}x Boundaries")
+            st.markdown(f"#### {reference_img['filename']} vs {img_data['filename']} Boundaries")
             
             # Resize masks for display
             mask1 = cv2.resize(reference_img["mask"], (display_size, display_size), interpolation=cv2.INTER_NEAREST)
@@ -1107,16 +1005,28 @@ def main():
                 # Show reference image with its boundary
                 ref_with_boundary = reference_img["display"].copy()
                 ref_with_boundary[boundary1 > 0] = [255, 255, 0]  # Yellow boundary
-                st.image(ref_with_boundary, caption=f"{reference_img['resolution']}x boundaries")
+                # Add processing method to caption
+                ref_method = "Tiled" if reference_img.get("is_highres", False) and reference_img.get("processing_method") == "tiled" else "Standard"
+                if ref_method == "Tiled":
+                    ref_caption = f"{reference_img['filename']} - {ref_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                else:
+                    ref_caption = f"{reference_img['filename']} - {ref_method} processing"
+                st.image(ref_with_boundary, caption=ref_caption)
             
             with col2:
                 # Show comparison image with its boundary
                 comp_with_boundary = img_data["display"].copy()
                 comp_with_boundary[boundary2 > 0] = [0, 255, 255]  # Cyan boundary
-                st.image(comp_with_boundary, caption=f"{img_data['resolution']}x boundaries")
+                # Add processing method to caption
+                img_method = "Tiled" if img_data.get("is_highres", False) and img_data.get("processing_method") == "tiled" else "Standard"
+                if img_method == "Tiled":
+                    img_caption = f"{img_data['filename']} - {img_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                else:
+                    img_caption = f"{img_data['filename']} - {img_method} processing"
+                st.image(comp_with_boundary, caption=img_caption)
             
             # Show combined visualization
-            st.image(combined_viz, caption="Combined boundaries (Yellow: Reference, Cyan: Comparison, White: Overlap)")
+            st.image(combined_viz, caption=f"Combined boundaries (Yellow: {reference_img['filename']}, Cyan: {img_data['filename']}, White: Overlap)")
             
             # Add a separator
             if i < len(images_data) - 1:
@@ -1132,11 +1042,11 @@ def main():
         - **Blue**: False Negatives (areas only in the second image)
         """)
         
-        # Use the highest resolution as reference
+        # Use the first image as reference
         reference_img = images_data[0]
         
         for i, img_data in enumerate(images_data[1:], 1):
-            st.markdown(f"#### {reference_img['resolution']}x vs {img_data['resolution']}x Heat Map")
+            st.markdown(f"#### {reference_img['filename']} vs {img_data['filename']} Heat Map")
             
             # Create precision-recall visualization
             mask1 = cv2.resize(reference_img["mask"], (display_size, display_size), interpolation=cv2.INTER_NEAREST)
@@ -1166,109 +1076,26 @@ def main():
                 st.image(heatmap, caption="Precision-Recall Heatmap", use_container_width=True)
             
             with col3:
-                # Show original images for reference
-                st.image(reference_img["display"], caption=f"Reference: {reference_img['resolution']}x", use_container_width=True)
-                st.image(img_data["display"], caption=f"Compare: {img_data['resolution']}x", use_container_width=True)
+                # Show original images for reference with processing method
+                ref_method = "Tiled" if reference_img.get("is_highres", False) and reference_img.get("processing_method") == "tiled" else "Standard"
+                if ref_method == "Tiled":
+                    ref_caption = f"Reference: {reference_img['filename']} - {ref_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                else:
+                    ref_caption = f"Reference: {reference_img['filename']} - {ref_method} processing"
+                st.image(reference_img["display"], caption=ref_caption, use_container_width=True)
+                
+                img_method = "Tiled" if img_data.get("is_highres", False) and img_data.get("processing_method") == "tiled" else "Standard"
+                if img_method == "Tiled":
+                    img_caption = f"Compare: {img_data['filename']} - {img_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                else:
+                    img_caption = f"Compare: {img_data['filename']} - {img_method} processing"
+                st.image(img_data["display"], caption=img_caption, use_container_width=True)
             
             # Add a separator
             if i < len(images_data) - 1:
                 st.markdown("---")
     
-    # Show metrics table if enabled
-    if show_metrics:
-        st.header("Comparison Metrics")
-        metrics_df = compute_metrics_table(images_data)
-        st.dataframe(metrics_df)
-    
-    # Show zoomed region if enabled
-    if show_zoom and len(images_data) >= 2:
-        st.header("Zoomed Region Comparison")
-        st.write("Examine a specific region more closely:")
-        
-        # Allow user to select reference image for zooming
-        ref_index = st.selectbox(
-            "Select reference image for zoom",
-            options=range(len(images_data)),
-            format_func=lambda i: f"{images_data[i]['filename']} ({images_data[i]['resolution']}x)",
-            index=0
-        )
-        
-        ref_img = images_data[ref_index]
-        ref_mask = ref_img["mask"]
-        
-        # Find a region with panels
-        y_indices, x_indices = np.where(ref_mask > 0.5)
-        
-        if len(y_indices) > 0 and len(x_indices) > 0:
-            # Find center of a solar panel as our region of interest
-            center_y = int(np.mean(y_indices))
-            center_x = int(np.mean(x_indices))
-            
-            # Add sliders for adjusting zoom position
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col1:
-                zoom_x = st.slider(
-                    "X position",
-                    min_value=0,
-                    max_value=ref_img["original"].shape[1] - 1,
-                    value=center_x,
-                    step=10
-                )
-            with col2:
-                zoom_size = st.slider(
-                    "Zoom size",
-                    min_value=50,
-                    max_value=min(500, min(ref_img["original"].shape[:2])),
-                    value=200,
-                    step=25
-                )
-            with col3:
-                zoom_y = st.slider(
-                    "Y position",
-                    min_value=0,
-                    max_value=ref_img["original"].shape[0] - 1,
-                    value=center_y,
-                    step=10
-                )
-            
-            # Calculate zoom region
-            y1 = max(0, zoom_y - zoom_size//2)
-            y2 = min(ref_img["original"].shape[0], zoom_y + zoom_size//2)
-            x1 = max(0, zoom_x - zoom_size//2)
-            x2 = min(ref_img["original"].shape[1], zoom_x + zoom_size//2)
-            
-            # Display zoomed regions for all images
-            cols = st.columns(len(images_data))
-            
-            for i, (col, img_data) in enumerate(zip(cols, images_data)):
-                with col:
-                    # Scale coordinates to match this image's dimensions
-                    scale_y = img_data["original"].shape[0] / ref_img["original"].shape[0]
-                    scale_x = img_data["original"].shape[1] / ref_img["original"].shape[1]
-                    
-                    img_y1 = int(y1 * scale_y)
-                    img_y2 = int(y2 * scale_y)
-                    img_x1 = int(x1 * scale_x)
-                    img_x2 = int(x2 * scale_x)
-                    
-                    # Ensure bounds
-                    img_y1 = max(0, img_y1)
-                    img_y2 = min(img_data["original"].shape[0], img_y2)
-                    img_x1 = max(0, img_x1)
-                    img_x2 = min(img_data["original"].shape[1], img_x2)
-                    
-                    # Extract zoom region
-                    zoom_img = img_data["original"][img_y1:img_y2, img_x1:img_x2]
-                    zoom_mask = img_data["mask"][img_y1:img_y2, img_x1:img_x2]
-                    
-                    # Create visualization
-                    zoom_viz = zoom_img.copy()
-                    zoom_viz[zoom_mask > 0.5] = zoom_viz[zoom_mask > 0.5] * 0.7 + np.array([255, 0, 0]) * 0.3
-                    
-                    # Show
-                    st.image(zoom_viz, caption=f"{img_data['resolution']}x zoom")
-        else:
-            st.warning("No segmentation found in the reference image to center zoom")
+
 
 if __name__ == "__main__":
     main() 

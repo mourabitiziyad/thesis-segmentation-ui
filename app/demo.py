@@ -227,11 +227,12 @@ if not img_files:
 
 top_col1, top_col2 = st.columns(2)
 with top_col1:
-    # Image selection
+    # Image selection - show exact filenames without inference
     selected_img = st.selectbox(
         'Choose an image to analyze:',
         img_files,
-        index=0 if len(img_files) > 0 else None
+        index=0 if len(img_files) > 0 else None,
+        format_func=lambda x: x  # Display the exact filename
     )
 
 with top_col2:
@@ -464,10 +465,11 @@ with col_setup:
         help="Enable for 4x and 10x images to preserve more details"
     )
     
-    display_option = st.radio(
-        "Display mode:",
-        ["Original image", "Binary mask", "Overlay", "Bounding boxes"]
-    )
+    # No longer needed since we show all visualizations
+    # display_option = st.radio(
+    #     "Display mode:",
+    #     ["Binary mask", "Overlay", "Bounding boxes"]
+    # )
     
     st.info("This demo uses pre-loaded images from the dataset. No upload is required.")
 
@@ -703,9 +705,6 @@ if selected_img and selected_model:
                 # Regular processing for normal images
                 pr_mask = model.predict(image_torch)
                 pr_mask = (pr_mask.squeeze().numpy().round())
-            
-            # Calculate bounding boxes
-            boxes = compute_bboxes(image, pr_mask)
         
         except Exception as e:
             st.error(f"Error loading model: {e}")
@@ -727,13 +726,68 @@ if selected_img and selected_model:
             # Add a horizontal line to separate settings from results
             st.markdown("---")
         
-        # Display columns
-        col1, col2 = st.columns(2)
+        # Create a row with 3 columns for the main visualizations
+        st.subheader("Analysis Results")
+        input_col, overlay_col, mask_col = st.columns(3)
         
-        with col1:
-            st.subheader("Original Image")
-            st.image(image_for_display, caption=f"Original: {selected_img}", use_container_width=True)
+        with input_col:
+            st.subheader("Input Image")
+            st.image(image_for_display, caption=f"{selected_img}", use_container_width=True)
+        
+        with overlay_col:
+            st.subheader("Segmentation Overlay")
+            # Create overlay visualization
+            display_mask = cv2.resize(pr_mask, display_size, interpolation=cv2.INTER_NEAREST)
+            colored_mask = np.zeros_like(image_for_display)
+            colored_mask[:,:,0] = display_mask * 255  # Red channel
+            overlay = cv2.addWeighted(image_for_display, 0.7, colored_mask, 0.3, 0)
             
+            # Include processing information in the caption
+            if do_tiled_processing:
+                overlay_caption = f"Overlay ({int(scale_factor*100)}% res)"
+            else:
+                overlay_caption = "Segmentation Overlay"
+            st.image(overlay, caption=overlay_caption, use_container_width=True)
+        
+        with mask_col:
+            st.subheader("Binary Mask")
+            # Resize mask for display
+            display_mask = cv2.resize(pr_mask, display_size, interpolation=cv2.INTER_NEAREST)
+            
+            # Include processing information in the caption
+            if do_tiled_processing:
+                mask_caption = f"Mask ({int(scale_factor*100)}% res)"
+            else:
+                mask_caption = "Binary Mask"
+            st.image(display_mask, caption=mask_caption, use_container_width=True)
+        
+        # # Add a row showing just the binary mask under each image
+        # st.subheader("Binary Mask Views")
+        # bin_col1, bin_col2, bin_col3 = st.columns(3)
+        
+        # with bin_col1:
+        #     # Create a black and white view of the binary mask (under input image)
+        #     binary_mask_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+        #     binary_mask_display[display_mask > 0.5] = [255, 255, 255]
+        #     st.image(binary_mask_display, caption="Binary Mask (B&W)", use_container_width=True)
+            
+        # with bin_col2:
+        #     # Create a red-colored binary mask view (under overlay)
+        #     red_mask_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+        #     red_mask_display[display_mask > 0.5] = [255, 0, 0]
+        #     st.image(red_mask_display, caption="Binary Mask (Red)", use_container_width=True)
+            
+        # with bin_col3:
+        #     # Create a heat map style view (under binary mask)
+        #     heat_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+        #     heat_display[display_mask > 0.5] = [0, 255, 0]
+        #     heat_display[display_mask <= 0.5] = [50, 50, 50]  # Dark gray background
+        #     st.image(heat_display, caption="Binary Mask (Highlight)", use_container_width=True)
+        
+        # Info and metrics rows
+        metrics_col, info_col = st.columns(2)
+        
+        with info_col:
             # Show detailed resolution info for high-res images
             is_highres = "4x" in selected_img or "10x" in selected_img or max(original_image.shape) > 1000
             if is_highres:
@@ -759,7 +813,8 @@ if selected_img and selected_model:
                     st.write(f"**Processing Resolution**: {processing_w}x{processing_h} pixels ({scale_factor:.2f}x scale)")
                     st.write(f"**Tile Size**: {tile_size}x{tile_size} pixels with {overlap}px overlap ({overlap_percent if 'overlap_percent' in locals() else int(overlap/tile_size*100)}%)")
                     st.write(f"**Total Tiles Processed**: {total_tiles}")
-            
+        
+        with metrics_col:
             # Show metrics if ground truth is available
             if has_gt:
                 st.subheader("Performance Metrics")
@@ -832,159 +887,16 @@ if selected_img and selected_model:
                         
                     except ImportError:
                         st.info("Install scipy for additional boundary metrics")
-        
-        with col2:
-            st.subheader("Segmentation Results")
-            
-            # Display according to selected mode
-            if display_option == "Original image":
-                st.image(image_for_display, caption="Original Image", use_container_width=True)
-                
-            elif display_option == "Binary mask":
-                # Resize mask to display size for better visualization
-                display_mask = cv2.resize(pr_mask, display_size, interpolation=cv2.INTER_NEAREST)
-                st.image(display_mask, caption="Binary Mask (White = Solar Panels)", use_container_width=True)
-                
-            elif display_option == "Overlay":
-                # Create colored overlay on display-sized image
-                display_mask = cv2.resize(pr_mask, display_size, interpolation=cv2.INTER_NEAREST)
-                colored_mask = np.zeros_like(image_for_display)
-                colored_mask[:,:,0] = display_mask * 255  # Red channel
-                overlay = cv2.addWeighted(image_for_display, 0.7, colored_mask, 0.3, 0)
-                st.image(overlay, caption="Solar Panels Overlay", use_container_width=True)
-                
-            elif display_option == "Bounding boxes":
-                # Calculate bounding boxes at model resolution
-                boxes = compute_bboxes(image, pr_mask)
-                
-                # Scale boxes to display resolution
-                scale_x = display_size[0] / 256
-                scale_y = display_size[1] / 256
-                scaled_boxes = []
-                for box in boxes:
-                    scaled_box = [
-                        int(box[0] * scale_y), 
-                        int(box[1] * scale_x), 
-                        int(box[2] * scale_y), 
-                        int(box[3] * scale_x)
-                    ]
-                    scaled_boxes.append(scaled_box)
-                
-                # Draw bounding boxes on display image
-                image_bboxes = image_for_display.copy()
-                for box in scaled_boxes:
-                    image_bboxes = cv2.rectangle(image_bboxes, (box[1], box[0]), (box[3], box[2]), (255, 0, 0), 2)
-                st.image(image_bboxes, caption="Solar Panels with Bounding Boxes", use_container_width=True)
 
         # END OF COLUMN LAYOUT - All column structures end here
 
         # Area calculations section - moved outside the column structure
-        st.markdown("---")
-        st.subheader("Area Calculations")
-        area = np.round(float(img_resolution) ** 2 * pr_mask.sum(), 4)
-        perc_area = np.round(100 * pr_mask.sum() / img_resolution ** 2, 2)
-        total_area = np.round(img_resolution ** 2 * float(img_resolution) ** 2, 2)
+        # st.markdown("---")
+        # st.subheader("Area Calculations")
+        # area = np.round(float(img_resolution) ** 2 * pr_mask.sum(), 4)
+        # perc_area = np.round(100 * pr_mask.sum() / img_resolution ** 2, 2)
+        # total_area = np.round(img_resolution ** 2 * float(img_resolution) ** 2, 2)
         
-        st.write(f"**Total Solar Panel Area**: {area} square meters")
-        st.write(f"**Coverage Percentage**: {perc_area}% of the image")
-        st.write(f"**Image Area**: {total_area} square meters")
-        
-        # Resolution comparison - COMPLETELY OUTSIDE any existing column structure
-        if is_highres and do_tiled_processing:
-            st.markdown("---")
-            st.subheader("Resolution Comparison")
-            st.write("Examine a magnified region to appreciate resolution difference:")
-            
-            # Find a region with panels (use the mask to find a good area to zoom in)
-            y_indices, x_indices = np.where(pr_mask > 0.5)
-            if len(y_indices) > 0 and len(x_indices) > 0:
-                # Find center of a solar panel as our region of interest
-                center_y = int(np.mean(y_indices))
-                center_x = int(np.mean(x_indices))
-                
-                # Calculate zoom region coordinates
-                zoom_size = min(256, pr_mask.shape[0]//4, pr_mask.shape[1]//4)
-                zoom_y1 = max(0, center_y - zoom_size//2)
-                zoom_y2 = min(pr_mask.shape[0], center_y + zoom_size//2)
-                zoom_x1 = max(0, center_x - zoom_size//2)
-                zoom_x2 = min(pr_mask.shape[1], center_x + zoom_size//2)
-                
-                # Extract zoom region from original high-resolution image (scale coordinates)
-                orig_zoom_y1 = int(zoom_y1 / scale_factor)
-                orig_zoom_y2 = int(zoom_y2 / scale_factor)
-                orig_zoom_x1 = int(zoom_x1 / scale_factor)
-                orig_zoom_x2 = int(zoom_x2 / scale_factor)
-                
-                # Ensure we don't go out of bounds
-                orig_zoom_y1 = max(0, min(orig_zoom_y1, original_image.shape[0]-1))
-                orig_zoom_y2 = max(0, min(orig_zoom_y2, original_image.shape[0]))
-                orig_zoom_x1 = max(0, min(orig_zoom_x1, original_image.shape[1]-1))
-                orig_zoom_x2 = max(0, min(orig_zoom_x2, original_image.shape[1]))
-                
-                # Extract zoomed regions
-                zoom_img = processing_img[zoom_y1:zoom_y2, zoom_x1:zoom_x2]
-                zoom_mask = pr_mask[zoom_y1:zoom_y2, zoom_x1:zoom_x2]
-                orig_zoom_img = original_image[orig_zoom_y1:orig_zoom_y2, orig_zoom_x1:orig_zoom_x2]
-                
-                # Create overlay for zoomed region
-                zoom_overlay = zoom_img.copy()
-                zoom_overlay[zoom_mask > 0.5, 0] = 255  # Red channel for segmentation
-                
-                # Create a 2x2 grid for all comparison images
-                st.write("### Processing Resolution Images")
-                comp_col1, comp_col2 = st.columns(2)
-                with comp_col1:
-                    st.write(f"Zoomed image ({scale_factor:.2f}x scale)")
-                    st.image(zoom_img, use_container_width=True)
-                with comp_col2:
-                    st.write("Segmentation overlay")
-                    st.image(zoom_overlay, use_container_width=True)
-                
-                st.write("### Original Resolution Images")
-                orig_comp_col1, orig_comp_col2 = st.columns(2)
-                with orig_comp_col1:
-                    st.write("Original resolution")
-                    st.image(orig_zoom_img, use_container_width=True)
-                with orig_comp_col2:
-                    st.write("Segmentation projected to original")
-                    # Create a comparable overlay for the original image
-                    resized_mask = cv2.resize(zoom_mask, (orig_zoom_img.shape[1], orig_zoom_img.shape[0]), 
-                                             interpolation=cv2.INTER_NEAREST)
-                    orig_overlay = orig_zoom_img.copy()
-                    orig_overlay[resized_mask > 0.5, 0] = 255  # Red channel for segmentation
-                    st.image(orig_overlay, use_container_width=True)
-                
-                # Add explanation
-                st.write("""
-                This comparison shows how the segmentation appears at both the processing resolution and 
-                the original high-resolution image. Higher quality settings preserve more details but take longer to process.
-                """)
-            else:
-                st.info("No solar panels detected for zoom comparison")
-        
-        # Coordinates
-        st.subheader("Panel Coordinates")
-        coordinates_dict = return_coordinates(boxes)
-        coor_values = list(coordinates_dict.values())
-        num_bboxes = len(coor_values)
-        
-        if num_bboxes > 0:
-            st.write(f"**Number of detected panels/groups**: {num_bboxes}")
-            
-            # Create a dataframe for coordinates for cleaner display
-            import pandas as pd
-            coords_data = []
-            
-            for i in range(num_bboxes):
-                coords_data.append({
-                    "Panel #": i+1,
-                    "Top Left": str(coor_values[i][0]),
-                    "Top Right": str(coor_values[i][1]),
-                    "Bottom Left": str(coor_values[i][2]),
-                    "Bottom Right": str(coor_values[i][3]),
-                })
-            
-            if coords_data:
-                st.dataframe(pd.DataFrame(coords_data))
-        else:
-            st.write("No solar panels detected in this image.") 
+        # st.write(f"**Total Solar Panel Area**: {area} square meters")
+        # st.write(f"**Coverage Percentage**: {perc_area}% of the image")
+        # st.write(f"**Image Area**: {total_area} square meters") 
