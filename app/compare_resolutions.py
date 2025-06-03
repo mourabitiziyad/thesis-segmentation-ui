@@ -513,7 +513,7 @@ def main():
         
         # Find available data directories
         app_dir = os.path.dirname(os.path.abspath(__file__))
-        potential_data_dirs = ["data", "data good", "test_data", "data set 4"]
+        potential_data_dirs = ["/Users/I752629/Desktop/Reference Thesis Images/Final Set/Set 2", "/Users/I752629/Desktop/Reference Thesis Images/Final Set/set 5", "/Users/I752629/Desktop/Reference Thesis Images/Final Set/set 6"]
         available_data_dirs = []
         
         for dir_name in potential_data_dirs:
