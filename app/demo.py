@@ -4,7 +4,6 @@ import streamlit as st
 import cv2
 import numpy as np
 import albumentations as A
-from pathlib import Path
 # Use the installed segmentation models rather than the local one
 import segmentation_models_pytorch as smp
 from utils import *
@@ -728,38 +727,50 @@ if selected_img and selected_model:
         
         # Create a row with 3 columns for the main visualizations
         st.subheader("Analysis Results")
-        input_col, overlay_col, mask_col = st.columns(3)
+        input_col, label_col, mask_col = st.columns(3)
         
         with input_col:
             st.subheader("Input Image")
             st.image(image_for_display, caption=f"{selected_img}", use_container_width=True)
         
-        with overlay_col:
-            st.subheader("Segmentation Overlay")
-            # Create overlay visualization
-            display_mask = cv2.resize(pr_mask, display_size, interpolation=cv2.INTER_NEAREST)
-            colored_mask = np.zeros_like(image_for_display)
-            colored_mask[:,:,0] = display_mask * 255  # Red channel
-            overlay = cv2.addWeighted(image_for_display, 0.7, colored_mask, 0.3, 0)
-            
-            # Include processing information in the caption
-            if do_tiled_processing:
-                overlay_caption = f"Overlay ({int(scale_factor*100)}% res)"
+        with label_col:
+            st.subheader("Label Image")
+            # Display ground truth label if available, otherwise show a placeholder
+            if has_gt:
+                # Resize ground truth mask for display
+                display_gt_mask = cv2.resize(gt_mask, display_size, interpolation=cv2.INTER_NEAREST)
+                # Convert to 3-channel for better visualization with color
+                gt_display = np.zeros((display_size[1], display_size[0], 3), dtype=np.uint8)
+                # Use a nice blue color for solar panels to distinguish from prediction
+                gt_display[display_gt_mask > 127] = [100, 200, 255]  # Light blue for solar panels
+                st.image(gt_display, caption="Ground Truth Label", use_container_width=True)
             else:
-                overlay_caption = "Segmentation Overlay"
-            st.image(overlay, caption=overlay_caption, use_container_width=True)
+                # Show placeholder when no ground truth is available
+                placeholder = np.zeros((display_size[1], display_size[0], 3), dtype=np.uint8)
+                placeholder[:] = [64, 64, 64]  # Dark gray background
+                # Add text overlay
+                cv2.putText(placeholder, "No Label", (display_size[0]//2-50, display_size[1]//2), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 128), 2)
+                cv2.putText(placeholder, "Available", (display_size[0]//2-60, display_size[1]//2+30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 128), 2)
+                st.image(placeholder, caption="No Ground Truth Available", use_container_width=True)
         
         with mask_col:
-            st.subheader("Binary Mask")
+            st.subheader("Predicted Mask")
             # Resize mask for display
             display_mask = cv2.resize(pr_mask, display_size, interpolation=cv2.INTER_NEAREST)
             
+            # Convert to 3-channel for better visualization with color
+            pred_display = np.zeros((display_size[1], display_size[0], 3), dtype=np.uint8)
+            # Use a nice green color for predicted solar panels
+            pred_display[display_mask > 0.5] = [100, 255, 100]  # Light green for predictions
+            
             # Include processing information in the caption
             if do_tiled_processing:
-                mask_caption = f"Mask ({int(scale_factor*100)}% res)"
+                mask_caption = f"Prediction ({int(scale_factor*100)}% res)"
             else:
-                mask_caption = "Binary Mask"
-            st.image(display_mask, caption=mask_caption, use_container_width=True)
+                mask_caption = "Predicted Mask"
+            st.image(pred_display, caption=mask_caption, use_container_width=True)
         
         # Info and metrics rows
         metrics_col, info_col = st.columns(2)

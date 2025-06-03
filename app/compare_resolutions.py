@@ -3,11 +3,7 @@ import torch
 import streamlit as st
 import cv2
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import albumentations as A
-from pathlib import Path
 import segmentation_models_pytorch as smp
 from utils import *
 import glob
@@ -51,12 +47,31 @@ def load_and_preprocess_image(image_path, target_size=(512, 512)):
     # Resize for display
     display_image = cv2.resize(image, target_size, interpolation=cv2.INTER_AREA)
     
+    # Check for ground truth label
+    base_path, ext = os.path.splitext(image_path)
+    gt_mask_path = f"{base_path}_label.png"
+    has_gt = os.path.exists(gt_mask_path)
+    gt_mask = None
+    
+    if has_gt:
+        try:
+            gt_mask = cv2.imread(gt_mask_path, cv2.IMREAD_GRAYSCALE)
+            if gt_mask is not None:
+                gt_mask = cv2.threshold(gt_mask, 0, 255, cv2.THRESH_BINARY)[1]
+                # Resize to display size for consistency
+                gt_mask = cv2.resize(gt_mask, target_size, interpolation=cv2.INTER_NEAREST)
+        except Exception as e:
+            st.warning(f"Could not load ground truth for {os.path.basename(image_path)}: {e}")
+            has_gt = False
+    
     return {
         "original": image,
         "display": display_image,
         "dimensions": original_dimensions,
         "path": image_path,
-        "filename": os.path.basename(image_path)
+        "filename": os.path.basename(image_path),
+        "has_gt": has_gt,
+        "gt_mask": gt_mask
     }
 
 @st.cache_data
@@ -831,23 +846,35 @@ def main():
                 st.subheader(f"Image {i+1}: {img_data['filename']}")
                 st.image(img_data["display"], caption=f"Original {img_data['dimensions'][1]}×{img_data['dimensions'][0]}px")
                 
-                # Display segmentation mask with processing method in the caption
+                # Display ground truth label if available, otherwise show placeholder
+                if img_data.get("has_gt", False) and img_data.get("gt_mask") is not None:
+                    # Convert ground truth to colored display
+                    gt_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                    gt_display[img_data["gt_mask"] > 127] = [100, 200, 255]  # Light blue for solar panels
+                    st.image(gt_display, caption="Ground Truth Label")
+                else:
+                    # Show placeholder when no ground truth is available
+                    placeholder = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                    placeholder[:] = [64, 64, 64]  # Dark gray background
+                    # Add text overlay
+                    cv2.putText(placeholder, "No Label", (display_size//2-50, display_size//2), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 128), 2)
+                    cv2.putText(placeholder, "Available", (display_size//2-60, display_size//2+30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 128), 2)
+                    st.image(placeholder, caption="No Ground Truth Available")
+                
+                # Display predicted mask with color
                 display_mask = cv2.resize(img_data["mask"], (display_size, display_size), interpolation=cv2.INTER_NEAREST)
-                mask_overlay = img_data["display"].copy()
-                mask_overlay[display_mask > 0.5] = mask_overlay[display_mask > 0.5] * 0.7 + np.array([255, 0, 0]) * 0.3
+                pred_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                pred_display[display_mask > 0.5] = [100, 255, 100]  # Light green for predictions
                 
                 # Include processing method in the caption
                 if img_data.get("is_highres", False) and img_data.get("processing_method") == "tiled":
-                    caption = f"Segmentation Result - Tiled ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                    caption = f"Predicted Mask - Tiled ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
                 else:
-                    caption = "Segmentation Result - Standard processing (no tiling applied)"
+                    caption = "Predicted Mask - Standard processing"
                 
-                st.image(mask_overlay, caption=caption)
-                
-                # Display binary mask
-                binary_display = np.zeros((display_size, display_size, 3), dtype=np.uint8)
-                binary_display[display_mask > 0.5] = [255, 255, 255]
-                st.image(binary_display, caption="Binary Mask")
+                st.image(pred_display, caption=caption)
     
     elif viz_mode == "Overlay":
         # Compare the first image with each other image
@@ -933,41 +960,84 @@ def main():
                 
                 # Display
                 st.markdown(f"#### {img1['filename']} vs {img2['filename']}")
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
-                    mask1_overlay = img1["display"].copy()
-                    mask1_overlay[mask1 > 0.5] = mask1_overlay[mask1 > 0.5] * 0.7 + np.array([255, 0, 0]) * 0.3
+                    st.image(img1["display"], caption=f"{img1['filename']} - Original")
+                
+                with col2:
+                    # Show label for img1 if available
+                    if img1.get("has_gt", False) and img1.get("gt_mask") is not None:
+                        gt_display1 = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                        gt_display1[img1["gt_mask"] > 127] = [100, 200, 255]  # Light blue
+                        st.image(gt_display1, caption="Ground Truth")
+                    else:
+                        placeholder = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                        placeholder[:] = [64, 64, 64]
+                        st.image(placeholder, caption="No GT Available")
+                
+                with col3:
+                    # Show predicted mask for img1
+                    pred_display1 = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                    pred_display1[mask1 > 0.5] = [100, 255, 100]  # Light green
                     # Add processing method to caption
                     img1_method = "Tiled" if img1.get("is_highres", False) and img1.get("processing_method") == "tiled" else "Standard"
                     if img1_method == "Tiled":
-                        img1_caption = f"{img1['filename']} - {img1_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                        img1_caption = f"Prediction - {img1_method}"
                     else:
-                        img1_caption = f"{img1['filename']} - {img1_method} processing"
-                    st.image(mask1_overlay, caption=img1_caption)
+                        img1_caption = f"Prediction - {img1_method}"
+                    st.image(pred_display1, caption=img1_caption)
+                
+                with col4:
+                    st.image(diff_viz, caption="Prediction Difference")
+                
+                # Second row for img2
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.image(img2["display"], caption=f"{img2['filename']} - Original")
                 
                 with col2:
-                    mask2_overlay = img2["display"].copy()
-                    mask2_overlay[mask2 > 0.5] = mask2_overlay[mask2 > 0.5] * 0.7 + np.array([0, 0, 255]) * 0.3
+                    # Show label for img2 if available
+                    if img2.get("has_gt", False) and img2.get("gt_mask") is not None:
+                        gt_display2 = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                        gt_display2[img2["gt_mask"] > 127] = [100, 200, 255]  # Light blue
+                        st.image(gt_display2, caption="Ground Truth")
+                    else:
+                        placeholder = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                        placeholder[:] = [64, 64, 64]
+                        st.image(placeholder, caption="No GT Available")
+                
+                with col3:
+                    # Show predicted mask for img2
+                    pred_display2 = np.zeros((display_size, display_size, 3), dtype=np.uint8)
+                    pred_display2[mask2 > 0.5] = [100, 255, 100]  # Light green
                     # Add processing method to caption
                     img2_method = "Tiled" if img2.get("is_highres", False) and img2.get("processing_method") == "tiled" else "Standard"
                     if img2_method == "Tiled":
-                        img2_caption = f"{img2['filename']} - {img2_method} ({patch_size}px patches, {overlap_percent}% overlap, {int(scale_factor*100)}% res)"
+                        img2_caption = f"Prediction - {img2_method}"
                     else:
-                        img2_caption = f"{img2['filename']} - {img2_method} processing"
-                    st.image(mask2_overlay, caption=img2_caption)
+                        img2_caption = f"Prediction - {img2_method}"
+                    st.image(pred_display2, caption=img2_caption)
                 
-                with col3:
-                    st.image(diff_viz, caption="Difference Map")
+                with col4:
+                    # Show difference explanation
+                    st.markdown("""
+                    **Difference Map Legend:**
+                    - 🟢 Green: Both detected
+                    - 🔴 Red: Only in first image
+                    - 🔵 Blue: Only in second image
+                    """)
                 
                 # Add detailed metrics for this pair
-                metrics = calculate_segmentation_metrics(mask1 > 0.5, mask2 > 0.5)
-                st.markdown(f"""
-                **Segmentation Similarity Metrics**:
-                - IoU (Intersection over Union): {metrics['iou']:.4f}
-                - Dice Coefficient: {metrics['dice']:.4f}
-                - Area Difference: {metrics['area_diff_percent']:.2f}%
-                """)
+                if show_metrics:
+                    metrics = calculate_segmentation_metrics(mask1 > 0.5, mask2 > 0.5)
+                    st.markdown(f"""
+                    **Segmentation Similarity Metrics**:
+                    - IoU (Intersection over Union): {metrics['iou']:.4f}
+                    - Dice Coefficient: {metrics['dice']:.4f}
+                    - Area Difference: {metrics['area_diff_percent']:.2f}%
+                    """)
                 
                 # Add a separator
                 if i < len(images_data) - 1 or j < len(images_data) - 1:

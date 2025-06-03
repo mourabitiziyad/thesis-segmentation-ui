@@ -5,7 +5,7 @@ from PIL import Image
 import os
 
 # Path to your LabelMe JSON file
-json_path = "/Users/I752629/Desktop/Reference Thesis Images/Final Set/set 6/esrgan_label.json"
+json_path = "/Users/I752629/Desktop/Reference Thesis Images/Final Set/set 3/satlas_label.json"
 
 # Load LabelMe JSON
 with open(json_path, "r") as f:
