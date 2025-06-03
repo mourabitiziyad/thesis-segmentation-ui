@@ -131,3 +131,5 @@ Features:
 2. **File Naming:** Use descriptive names to easily identify images in the dropdown
 3. **Ground Truth:** Provide labels when available for accuracy assessment
 4. **Memory:** For very large images, adjust the scale factor in tiled processing mode
+
+Main Logic and Design of the Demo app was adapted from https://github.com/saizk/Deep-Learning-for-Solar-Panel-Recognition
